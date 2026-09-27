@@ -1,78 +1,167 @@
-# Vision-Based Real-Time Pavement Degradation Detection & GIS System
-**Transdisciplinary Smart City Infrastructure & Mobility Project**  
-*Review 2 Working Prototype & Implementation*
+# Vision-Based Real-Time Pavement Degradation Detection and GIS System
 
----
+An AI-assisted smart-city road-monitoring platform that brings together pavement-defect detection, GPS telemetry, ASTM D6433 pavement-condition analysis, interactive GIS mapping, and municipal repair work-order generation.
 
-## 📌 Project Overview
-This repository contains the complete implementation of an AI-driven, transdisciplinary road monitoring platform. The system bridges mobile telemetry, computer vision, civil engineering pavement metrics (ASTM D6433 / IRC 82-2015), and municipal GIS mapping.
+The application includes sample survey data and can run immediately in its OpenCV-based detection mode. An included YOLOv8 weight file can be enabled with one optional dependency install.
 
-### Team Members (5)
-* **Vishnu Nair** (`23BEL1028`) — AI / Computer Vision Lead
-* **Jadeja Suryadeepsinh Bharatsinh** (`23BEL1027`) — Project Lead & System Orchestrator
-* **Udayvardhan Singh Rathore** (`23BEL1018`) — Civil Engineering Standards & PCI Lead
-* **Ainessh kumar S** (`23BEL1039`) — Geospatial Analysis & Web-GIS Lead
-* **Shreyan Biswas** (`23BEL1052`) — Urban Governance & Municipal Work Order Lead
+## What It Does
 
----
+| Area | Capability |
+| --- | --- |
+| Vision | Identifies RDD2022-style longitudinal cracks (D00), transverse cracks (D10), alligator cracks (D20), and potholes (D40). |
+| Telemetry | Receives live GPS fixes over HTTP and synchronizes a route with survey timestamps. |
+| Civil analytics | Calculates a Pavement Condition Index (PCI) using an ASTM D6433-inspired deduct-value workflow. |
+| GIS | Shows survey routes, defect markers, clusters, and heatmaps in an interactive map. |
+| Municipal operations | Produces repair-priority work orders based on defect type and severity. |
 
-## 🚀 Quick Start Guide
+## Requirements
 
-### Option 1: Automated Launch (Recommended)
-Open your terminal in this directory and execute:
+- Git
+- Python 3.11 (the current launcher creates its environment with `python3.11`)
+- `pip`, which is installed with standard Python distributions
+
+The project is currently validated with Python 3.11. Newer Python versions may work, but the computer-vision and YOLO dependencies have not yet been tested across them. Check your installed version with:
+
 ```bash
+python3.11 --version
+```
+
+On Windows, use `py -3.11` in place of `python3.11` in the commands below.
+
+## Quick Start
+
+### macOS and Linux
+
+```bash
+git clone https://github.com/Suryadeepsinh-Jadeja/Vision-based-real-time-pavement-degradation-detection.git
+cd Vision-based-real-time-pavement-degradation-detection
 ./run.sh
 ```
-This script will automatically configure your Python environment, install required libraries, and launch the Web-GIS dashboard at `http://localhost:8501`.
 
-### Option 2: Manual Launch
+The launcher creates `venv/` when needed, installs the base dashboard dependencies, and starts the application. Open [http://localhost:8501](http://localhost:8501) in a browser. Stop the server with `Ctrl+C`.
+
+If the shell reports a permission error, make the launcher executable once:
+
 ```bash
-# 1. Activate Python virtual environment
+chmod +x run.sh
+./run.sh
+```
+
+### Windows or Manual Setup
+
+```powershell
+git clone https://github.com/Suryadeepsinh-Jadeja/Vision-based-real-time-pavement-degradation-detection.git
+cd Vision-based-real-time-pavement-degradation-detection
+py -3.11 -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app/dashboard.py
+```
+
+If PowerShell blocks activation, run this for the current shell and retry the activation command:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+For a Unix-like manual setup, use:
+
+```bash
+python3.11 -m venv venv
 source venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Launch Streamlit Municipal Geoportal
-streamlit run app/dashboard.py
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m streamlit run app/dashboard.py
 ```
 
----
+## Enable YOLOv8 Detection (Optional)
 
-## 📂 Repository File Structure
+The base installation runs the dashboard using its built-in OpenCV pavement-feature detector. To enable the included `models/pothole_yolov8.pt` weights, install the optional YOLO dependency after the base setup:
 
-```
-├── app/
-│   ├── __init__.py
-│   ├── dashboard.py         # Streamlit Web-GIS Municipal Dashboard
-│   ├── detector.py          # YOLOv8 & OpenCV RDD2022 Defect Detector
-│   ├── pci_engine.py        # ASTM D6433 Civil Pavement Condition Index Engine
-│   ├── telemetry.py         # Smartphone GPS HTTP Receiver & Interpolator
-│   └── work_order.py        # Municipal PWD Maintenance Work Order Generator
-├── data/
-│   ├── sample_gps_track.csv # Pre-synchronized smart city survey corridor GPS
-│   └── sample_defects.json  # Pre-calibrated RDD2022 road defect detections
-├── run.sh                   # One-click execution script
-├── requirements.txt         # Project dependencies
-├── new.md                   # Updated Transdisciplinary System Specification
-├── Review_2_Presentation.md # Slide-by-slide presentation deck with talking points
-├── VIVA_DEFENSE_GUIDE.md    # Viva defense questions & answers for all 5 team members
-└── smart ppt.pdf            # Original Review 1 presentation
+```bash
+python -m pip install -r requirements-yolo.txt
 ```
 
----
+This installs Ultralytics and its PyTorch dependency, which can require a substantial download. On the next application start, the sidebar should report `YOLOv8 Deep Learning (pothole_yolov8.pt)`. If it instead reports the OpenCV engine, the dashboard remains usable; check the terminal output for the model-loading error.
 
-## 🔬 Transdisciplinary Modules
+## Try the Demo
 
-1. **Electrical / Telemetry (`app/telemetry.py`):**
-   * Real-time HTTP listener on `http://localhost:5050/gps` receiving smartphone GPS fixes.
-   * Linear temporal interpolation matching 30 FPS camera frames with 1–5 Hz GPS sensors.
-2. **Computer Science / AI (`app/detector.py`):**
-   * Object detection conforming to RDD2022 international schema: `D00` (Longitudinal), `D10` (Transverse), `D20` (Alligator), `D40` (Pothole).
-   * Automatic bounding box pixel-to-metric area estimation and severity classification (`Low`, `Medium`, `High`).
-3. **Civil Engineering (`app/pci_engine.py`):**
-   * Strict adherence to **ASTM D6433-20** Pavement Condition Index formulation.
-   * Empirical Deduct Value ($DV$) non-linear curve evaluation and iterative Corrected Deduct Value ($CDV$) reduction.
-4. **Urban Governance / GIS (`app/dashboard.py` & `app/work_order.py`):**
-   * Interactive Folium map with defect marker clusters, vehicle route polyline, and Kernel Density Estimation heatmaps.
-   * Automated Public Works Department (PWD) repair tickets following Indian Road Congress (**IRC:82-2015**) standards.
+1. Start the dashboard and leave **Preloaded Smart City Corridor Footage** selected.
+2. Move the sequence playback slider to inspect a synthetic road frame with synchronized sample GPS data and detected distress annotations.
+3. Open **Web-GIS Map and Heatmaps** to inspect the sample route and defect locations.
+4. Open **ASTM D6433 PCI Analytics** to view the calculated pavement score and its defect breakdown.
+5. Open **Municipal Work Orders** to generate repair priorities and export work-order output.
+
+You can also select **Upload Road Video / Image** in the vision module. Supported image formats are JPG and PNG; supported video formats are MP4, MOV, and AVI.
+
+## Live GPS Telemetry
+
+Starting the dashboard also starts a local telemetry server on port `5050`. Send a JSON `POST` request to `http://localhost:5050/gps` from a mobile app, GPS logger, or another local client.
+
+```json
+{
+  "latitude": 12.9716,
+  "longitude": 79.1585,
+  "speed_kmh": 28.5,
+  "heading": 85.0,
+  "accuracy": 2.4,
+  "timestamp": 1760000000
+}
+```
+
+`speed` is also accepted in place of `speed_kmh`, and `bearing` is accepted in place of `heading`. A `GET` request to the same endpoint returns the latest received fix.
+
+Example using `curl`:
+
+```bash
+curl -X POST http://localhost:5050/gps \
+  -H "Content-Type: application/json" \
+  -d '{"latitude":12.9716,"longitude":79.1585,"speed_kmh":28.5,"heading":85.0}'
+```
+
+The telemetry server binds to all local network interfaces. Treat it as a development/demo endpoint; it does not provide authentication or persistent storage.
+
+## Project Structure
+
+```text
+app/
+  dashboard.py       Streamlit dashboard and user workflow
+  detector.py        YOLOv8/OpenCV pavement-defect detection
+  pci_engine.py      Pavement Condition Index calculation
+  telemetry.py       GPS receiver, storage, and route interpolation
+  work_order.py      Municipal maintenance work-order generation
+data/
+  sample_defects.json
+  sample_gps_track.csv
+models/
+  pothole_yolov8.pt  Included optional YOLOv8 weights
+requirements.txt     Base dashboard dependencies
+requirements-yolo.txt Optional YOLOv8 dependency
+run.sh               macOS/Linux launcher
+```
+
+## Troubleshooting
+
+| Problem | Resolution |
+| --- | --- |
+| `python3.11: command not found` | Install Python 3.11, then rerun the setup command. |
+| `Address already in use` | Stop the process using port `8501` or `5050`, then restart the dashboard. |
+| Dashboard opens but YOLO is inactive | Run `python -m pip install -r requirements-yolo.txt`, then restart. The OpenCV fallback is expected without this optional package. |
+| Map tiles do not load | Confirm the browser has internet access; Folium map tiles are fetched from their external provider. |
+| A dependency installation fails | Upgrade pip with `python -m pip install --upgrade pip`, confirm Python 3.11 is active, and rerun the installation command. |
+
+## Team
+
+- Vishnu Nair (`23BEL1028`) - AI and computer vision
+- Jadeja Suryadeepsinh Bharatsinh (`23BEL1027`) - project lead and system orchestration
+- Udayvardhan Singh Rathore (`23BEL1018`) - civil engineering standards and PCI
+- Ainessh Kumar S (`23BEL1039`) - geospatial analysis and Web-GIS
+- Shreyan Biswas (`23BEL1052`) - urban governance and municipal work orders
+
+## Supporting Material
+
+- `new.md`: system specification
+- `Review_2_Presentation.md`: presentation outline and speaker notes
+- `VIVA_DEFENSE_GUIDE.md`: review and viva preparation material
+- `smart ppt.pdf`: earlier presentation
