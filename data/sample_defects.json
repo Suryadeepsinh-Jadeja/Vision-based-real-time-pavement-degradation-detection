@@ -1,0 +1,80 @@
+[
+  {
+    "id": "DEF-001",
+    "class": "D40",
+    "label": "D40 - Pothole",
+    "confidence": 0.92,
+    "severity": "H",
+    "latitude": 12.972240,
+    "longitude": 79.159230,
+    "area_px": 5420,
+    "extent_sq_m": 0.45,
+    "time_sec": 8.0,
+    "timestamp": "2026-09-26 10:14:22"
+  },
+  {
+    "id": "DEF-002",
+    "class": "D20",
+    "label": "D20 - Alligator Crack",
+    "confidence": 0.86,
+    "severity": "M",
+    "latitude": 12.972570,
+    "longitude": 79.159600,
+    "area_px": 3890,
+    "extent_sq_m": 1.20,
+    "time_sec": 12.0,
+    "timestamp": "2026-09-26 10:14:26"
+  },
+  {
+    "id": "DEF-003",
+    "class": "D00",
+    "label": "D00 - Longitudinal Crack",
+    "confidence": 0.81,
+    "severity": "L",
+    "latitude": 12.973250,
+    "longitude": 79.160370,
+    "area_px": 1420,
+    "extent_sq_m": 0.80,
+    "time_sec": 20.0,
+    "timestamp": "2026-09-26 10:14:34"
+  },
+  {
+    "id": "DEF-004",
+    "class": "D40",
+    "label": "D40 - Pothole",
+    "confidence": 0.94,
+    "severity": "M",
+    "latitude": 12.973780,
+    "longitude": 79.160960,
+    "area_px": 3150,
+    "extent_sq_m": 0.28,
+    "time_sec": 26.0,
+    "timestamp": "2026-09-26 10:14:40"
+  },
+  {
+    "id": "DEF-005",
+    "class": "D10",
+    "label": "D10 - Transverse Crack",
+    "confidence": 0.79,
+    "severity": "L",
+    "latitude": 12.974480,
+    "longitude": 79.161760,
+    "area_px": 1120,
+    "extent_sq_m": 0.65,
+    "time_sec": 34.0,
+    "timestamp": "2026-09-26 10:14:48"
+  },
+  {
+    "id": "DEF-006",
+    "class": "D40",
+    "label": "D40 - Pothole",
+    "confidence": 0.95,
+    "severity": "H",
+    "latitude": 12.974830,
+    "longitude": 79.162160,
+    "area_px": 6800,
+    "extent_sq_m": 0.62,
+    "time_sec": 38.0,
+    "timestamp": "2026-09-26 10:14:52"
+  }
+]

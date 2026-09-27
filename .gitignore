@@ -1,0 +1,20 @@
+# Python environments and generated Python artifacts
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# macOS metadata
+.DS_Store
+
+# Local assistant/editor configuration
+.agents/
+.claude/
+
+# Streamlit local configuration and caches
+.streamlit/
+
+# Generated application output
+output/
+uploads/
+*.log

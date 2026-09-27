@@ -1,0 +1,3 @@
+# Optional YOLOv8 Deep Learning Engine (PyTorch & Ultralytics)
+# Note: Downloads ~2GB of PyTorch wheels
+ultralytics>=8.2.0
