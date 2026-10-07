@@ -264,8 +264,13 @@ def main(argv: list[str] | None = None) -> int:
             args.val_fraction,
         )
 
+    # Write an ABSOLUTE path. Ultralytics resolves a relative `path` against the
+    # YAML's own directory in some versions and against datasets_dir in others,
+    # so a relative value works on a Mac and silently fails under /content
+    # (Colab) or /kaggle/input (Kaggle). Absolute works everywhere.
+    dataset_root = args.dst.resolve()
     (args.dst / "roadscope.yaml").write_text(
-        "path: .\ntrain: images/train\nval: images/val\n\n"
+        f"path: {dataset_root}\ntrain: images/train\nval: images/val\n\n"
         "names:\n"
         "  0: D00   # Longitudinal Crack\n"
         "  1: D10   # Transverse Crack\n"

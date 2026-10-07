@@ -139,3 +139,19 @@ def test_rejects_unknown_country(prepare, fake_rdd2022, tmp_path):
         prepare.main(
             ["--src", str(fake_rdd2022), "--dst", str(tmp_path / "x"), "--countries", "Atlantis"]
         )
+
+
+def test_dataset_yaml_uses_absolute_path(prepare, fake_rdd2022, tmp_path):
+    """Relative `path` breaks under /content (Colab) and /kaggle/input.
+
+    Ultralytics resolves a relative path against the YAML's directory in some
+    versions and against datasets_dir in others, so the curation script must
+    emit an absolute path for the run to work off-machine.
+    """
+    out = tmp_path / "curated"
+    prepare.main(["--src", str(fake_rdd2022), "--dst", str(out), "--val-fraction", "0.5"])
+    yaml_text = (out / "roadscope.yaml").read_text()
+    path_line = next(ln for ln in yaml_text.splitlines() if ln.startswith("path:"))
+    value = path_line.split(":", 1)[1].strip()
+    assert value.startswith("/"), f"dataset path must be absolute, got {value!r}"
+    assert Path(value) == out.resolve()
