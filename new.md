@@ -1,6 +1,11 @@
 # AI-Based Pothole Detection and GIS Mapping System
 **Transdisciplinary Smart City Infrastructure & Mobility Project**
 
+> **⚠️ SUPERSEDED SPECIFICATION.** This is the original design spec, retained for history and
+> viva reference. §6 "How to Run the Working Prototype" no longer applies — the prototype it
+> describes has been deleted. The replacement architecture is in
+> [`REBUILD_PLAN.md`](REBUILD_PLAN.md). Recoverable at commit `a4008379`.
+
 ---
 
 ## 1. Executive Summary & Problem Statement

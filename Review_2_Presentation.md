@@ -1,6 +1,10 @@
 # Vision-Based Real-Time Pavement Degradation Detection & GIS System
 ## Review 2 Presentation: Implementation & Working Prototype
 
+> **⚠️ SUPERSEDED.** This outline describes the pre-rebuild prototype, now deleted. Demo commands
+> referencing `app/dashboard.py` are no longer valid. See [`REBUILD_PLAN.md`](REBUILD_PLAN.md).
+> Recoverable at commit `a4008379`.
+
 ---
 
 ### Slide 1: Title & Team Credentials
