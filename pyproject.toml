@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "roadscope"
+version = "0.1.0"
+description = "Vision-based real-time pavement degradation detection and GIS system"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+
+# Base install stays light: the agent must boot without the CV/LLM stack.
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python-headless>=4.8.0",
+    "paho-mqtt>=2.1.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Deep-learning detector. ~2GB of PyTorch wheels.
+yolo = ["ultralytics>=8.2.0"]
+# Geospatial map matching (pulls in geopandas/shapely).
+geo = ["osmnx>=1.9.0"]
+# FastAPI receiver and dashboard.
+server = ["fastapi>=0.115.0", "uvicorn[standard]>=0.32.0", "pandas>=2.1.0"]
+ui = ["streamlit>=1.35.0", "folium>=0.16.0", "streamlit-folium>=0.20.0",
+      "matplotlib>=3.8.0", "Pillow>=10.0.0"]
+dev = ["pytest>=8.3.0", "pytest-cov>=5.0.0", "ruff>=0.7.0"]
+
+[project.scripts]
+roadscope-agent = "roadscope.agent.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/roadscope"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "vision: requires ultralytics and a weights file",
+    "integration: requires a running MQTT broker",
+    "field: requires physical capture hardware",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# ruff 0.16 formats Python code blocks embedded in Markdown by default, which
+# rewrites the deliberately aligned comments in REBUILD_PLAN.md. Exclude docs.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",  # line length handled by the formatter
+    "B008",  # function call in default arg - used by pydantic Field
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+"__init__.py" = ["F401"]

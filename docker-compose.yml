@@ -1,0 +1,40 @@
+# Local demo infrastructure. One command: docker compose up -d
+#
+# A local broker is deliberate: a lab-WiFi demo should not depend on a public
+# broker that anyone else can disrupt or that sees the data.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: roadscope-mosquitto
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # WebSocket, for browser dashboards
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/#' -C 1 -W 3 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Optional: PostGIS instead of the SQLite store. Not enabled by default --
+  # the schema in REBUILD_PLAN.md section 10.5 is designed to port to it, but
+  # SQLite keeps the demo to zero infrastructure.
+  postgis:
+    image: postgis/postgis:16-3.4
+    container_name: roadscope-postgis
+    profiles: ["postgis"]
+    environment:
+      POSTGRES_DB: roadscope
+      POSTGRES_USER: roadscope
+      POSTGRES_PASSWORD: roadscope
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  postgis-data:

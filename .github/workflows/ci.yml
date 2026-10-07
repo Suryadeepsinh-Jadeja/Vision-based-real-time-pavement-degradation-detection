@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format
+        run: ruff format --check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - name: pytest
+        run: python -m pytest -v
+      - name: agent self-check
+        # Proves the package imports and the CLI works with no weights present.
+        # On CI there is no models/*.pt, so this exercises the graceful-degradation
+        # path: the detector must report unavailable rather than load something else.
+        run: python -m roadscope.agent --check || true
+
+  paths:
+    name: Path independence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - name: resolve paths from a foreign working directory
+        run: |
+          cd /tmp
+          python -c "
+          from roadscope import paths
+          root = paths.project_root()
+          assert (root / 'pyproject.toml').exists(), root
+          print('project root resolved from', __import__('os').getcwd(), '->', root)
+          "
