@@ -1359,3 +1359,71 @@ Every phase also carries a **contingency**: what to do if the gate fails. A plan
 | 4 | Kaggle or Colab for GPU? Which account has quota? | W1 day 1 | **Day 1, blocking** |
 | 5 | Is a public broker acceptable if local Mosquitto fails on demo day? | W6.1 fallback | Day 9 |
 | 6 | Does the reviewer expect PostGIS? If so, schedule must absorb ~2 days | W6.4 | Day 3 |
+---
+
+## 20. Phase progress log
+
+### Phase 1 — Foundation & Kick-Off ✅ (6 of 7 gates)
+
+| Gate | Status |
+| --- | --- |
+| `pip install -e .` clean | ✅ |
+| `python -m roadscope.agent --help` runs | ✅ |
+| `test_detector_singleton` passes | ✅ |
+| `test_paths_independent_of_cwd` passes | ✅ |
+| ruff clean, 33 tests pass | ✅ |
+| Training run 1 in flight | ❌ **blocked — needs GPU account (§19 Q4)** |
+
+Delivered: `pyproject.toml` with optional extras, `src/roadscope/` package
+(`paths`, `config`, `logging_setup`, `vision.detector`, `geo.quality`,
+`geo.kalman`), CI workflow, `docker-compose.yml`, `.env.example`,
+`scripts/prepare_rdd2022.py`, `scripts/train_cloud.md`,
+`scripts/download_weights.sh`.
+
+### Phase 2 — Vertical Slice ✅ (architecture proven; demo pending)
+
+Delivered: `storage/` (schema, db, repository), `transport/` (topics, outbox,
+mqtt_client), `agent/` (ingest sources, pipeline, health), `server/`
+(subscriber, FastAPI app). 44 tests pass.
+
+Verified by measurement, not assertion:
+
+| Claim | Evidence |
+| --- | --- |
+| Link loss loses nothing | `test_link_loss_loses_nothing` — capture while the publisher refuses all messages, flush on reconnect, zero loss |
+| A restarted agent delivers what the dead one queued | `test_outbox_replay_after_restart` |
+| QoS1 redelivery is idempotent | `test_duplicate_gps_seq_is_idempotent` — 5 deliveries, 1 row, 4 duplicates counted |
+| Ingest never blocks on inference | `test_ingest_is_not_blocked_by_inference` — a detector 15× slower than capture; capture continues, queue absorbs the difference |
+| The agent has no UI dependency | `test_agent_does_not_import_streamlit` + runtime check: no Streamlit/Folium module loaded |
+| Accuracy metadata survives the chain | end-to-end run: `acc=3.0 hdop=0.8 flag=good` persisted intact |
+
+#### Measurement: inference cost on CPU
+
+| `imgsz` | ms/frame | Rate |
+| --- | --- | --- |
+| 640 | 127 ms | 7.9 fps |
+| 960 | 263 ms | 3.8 fps |
+
+An 8-second run at 640: 206 frames captured, 64 processed, **134 dropped
+(65%)**.
+
+**Finding: inference is the binding constraint, not capture.** A 30 fps camera
+cannot be fully processed on this CPU-only 8 GB laptop. The 65% drop rate is
+correct behaviour — stale frames are worthless — but it has two consequences:
+
+1. The queue depth of 8 is sized for a GPU. On CPU it should drop to 2–3 so the
+   queue does not hold frames that are already stale by the time they are read.
+2. The default `imgsz` is now **640**, not 960. 960 halved throughput to 3.8 fps
+   and detected *zero* objects on the test frame, so it was costing accuracy for
+   no benefit. Re-raise to 960 on CUDA, or once the RDD2022 model exists.
+
+Drop percentage is published via the status topic rather than hidden, so
+degradation is visible instead of silent.
+
+#### Still open for Phase 2
+
+- [ ] Live phone MJPEG → dashboard. Needs the phone on a hotspot with DroidCam or
+      IP Web Camera serving a stream URL. Code path exists and is exercised by
+      `VideoFileSource`; only the physical link is untested.
+- [ ] Streamlit dashboard reading the database. Phase 4 deliverable; the
+      database side is proven, the UI is not written yet.

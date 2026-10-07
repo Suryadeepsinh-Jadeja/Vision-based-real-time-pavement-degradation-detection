@@ -44,7 +44,12 @@ class Settings(BaseSettings):
     model_name: str = "roadscope-yolov8m-seg.pt"
     conf_threshold: float = 0.35
     iou_threshold: float = 0.50
-    imgsz: int = 960
+    # Measured on this 8 GB CPU-only laptop with the legacy weights:
+    #   imgsz=640 -> 127 ms/frame (7.9 fps)
+    #   imgsz=960 -> 263 ms/frame (3.8 fps)
+    # Default to 640 so the agent reaches a usable rate without a GPU. Raise to
+    # 960 on a CUDA machine, or once the RDD2022 model is trained (Phase 3).
+    imgsz: int = 640
     device: str = "cpu"
 
     # --- Pipeline -------------------------------------------------------

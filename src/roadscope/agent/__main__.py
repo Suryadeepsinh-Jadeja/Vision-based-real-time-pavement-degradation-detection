@@ -33,6 +33,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-url", help="override ROADSCOPE_CAMERA_URL")
     parser.add_argument("--model-path", help="override ROADSCOPE_MODEL_PATH")
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, ERROR")
+    parser.add_argument(
+        "--seconds", type=float, default=10.0, help="how long to run before stopping"
+    )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help="skip MQTT; replay the local outbox into the server database",
+    )
     return parser
 
 
@@ -92,10 +100,55 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return _diagnose(settings)
 
-    log.warning(
-        "Capture pipeline is not implemented yet. That is Phase 2 of the rebuild "
-        "(see REBUILD_PLAN.md). Use --check to verify configuration."
+    if args.replay:
+        from ..server.subscriber import ingest_from_outbox
+
+        count = ingest_from_outbox(settings.outbox_db, settings, repo=None)  # type: ignore[arg-type]
+        log.info("replayed %d message(s) into %s", count, settings.server_db)
+        return 0
+
+    return _run(settings, args)
+
+
+def _run(settings, args) -> int:
+    """Run the capture -> infer -> transmit loop."""
+    import time as _time
+
+    from ..transport.mqtt_client import MQTTPublisher
+    from ..transport.topics import TOPIC_STATUS, topic_for
+    from .pipeline import EdgePipeline
+
+    publisher = MQTTPublisher(settings.mqtt_url, client_id=f"roadscope-{settings.device_id}")
+    publisher.set_last_will(
+        topic_for(settings.mqtt_topic_prefix, settings.device_id, TOPIC_STATUS),
+        {"device_id": settings.device_id, "ts_utc": _time.time(), "status": "offline"},
     )
+    publisher.connect_async()
+    if publisher.wait_connected(5.0):
+        log.info("broker reachable at %s", settings.mqtt_url)
+    else:
+        log.warning(
+            "no broker at %s. Capturing anyway; the outbox will buffer until one "
+            "appears. Nothing is lost.",
+            settings.mqtt_url,
+        )
+
+    pipeline = EdgePipeline(settings, publisher=publisher)
+    pipeline.start()
+    log.info("running for %.1fs", args.seconds)
+    try:
+        _time.sleep(args.seconds)
+    except KeyboardInterrupt:
+        log.info("interrupted")
+    finally:
+        pipeline.stop()
+        delivered = pipeline.flush()
+        log.info(
+            "delivered %d queued message(s); %d still pending",
+            delivered,
+            pipeline.outbox.depth(),
+        )
+        publisher.close()
     return 0
 
 
