@@ -9,23 +9,56 @@ rebuild that cannot be compressed later, because it waits on external quota.
 
 ## 1. Get the dataset
 
-RDD2022 is ~4 GB.
+Verified against figshare's API. **The archive is 12.65 GB** — this is the single
+biggest practical obstacle, more than the training itself.
 
-- figshare: <https://doi.org/10.6084/m9.figshare.21431547.v1>
-- or `github.com/sekilab/RoadDamageDetector`
+| | |
+| --- | --- |
+| Article | `21431547` — *RDD2022, released through CRDDC'2022* |
+| DOI | `10.6084/m9.figshare.21431547.v1` |
+| Archive | `RDD2022_released_through_CRDDC2022.zip` |
+| File id | `38030910` |
+| Direct URL | `https://ndownloader.figshare.com/files/38030910` |
 
-**Kaggle:** search "RDD2022" in Datasets, add to a notebook kernel.
-**Colab:** download with `!wget` in a cell, or mount Google Drive.
+```python
+# In Colab / Kaggle. 12.65 GB - expect this to take a while and to risk
+# session timeouts. Do it once, then cache the curated subset.
+!wget -q --show-progress -O rdd2022.zip https://ndownloader.figshare.com/files/38030910
+```
 
-Expected layout:
+> **Do not guess the ndownloader file id.** A wrong id returns an HTML page
+> silently, and `unzip` then fails with *"End-of-central-directory signature not
+> found"* — which looks like a corrupt download rather than a bad URL. Check
+> `ls -lh rdd2022.zip` first: it should be ~13G, not a few KB.
+
+Expected layout — note `annotations/xmls`, **Pascal VOC XML, not COCO**:
 
 ```
 RDD2022/
-  India/            train/images/*.jpg   train/annotations/coco.json
-  Japan/            train/images/*.jpg   train/annotations/coco.json
-  United_States/    train/images/*.jpg   train/annotations/coco.json
-  Norway/ Czech/ China/ ...
+  India/            train/images/*.jpg   train/annotations/xmls/*.xml
+  Japan/            train/images/*.jpg   train/annotations/xmls/*.xml
+  United_States/    train/images/*.jpg   train/annotations/xmls/*.xml
+  Norway/  Czech/  China_Drone/  China_MotorBike/
 ```
+
+The authoritative label map (`label_map.pbtxt`, file id `38030820`) is:
+
+```
+D00 = 1,  D10 = 2,  D20 = 3,  D40 = 4
+```
+
+Those are **1-indexed TF Object Detection ids, not YOLO class indices**. COCO
+re-uploads use different ids again (D40 as `category_id 7`). Never assume an id
+ordering — resolve the D-code from the class *name*, which is what
+`prepare_rdd2022.py` does.
+
+**Disk.** Colab free gives ~78 GB, so 13 GB extracted fits, but download and
+extraction are the fragile part. Mitigations:
+
+- Curate immediately after extracting, then delete the raw zip.
+- Save `rdd2022-curated/` to Drive so a reconnect does not force a re-download.
+- Prefer Kaggle if a pre-converted RDD2022 exists there — but verify it (4
+  classes, pothole mapped correctly) before trusting it.
 
 ---
 
@@ -35,12 +68,16 @@ RDD2022/
 python scripts/prepare_rdd2022.py --src /path/to/RDD2022 --inspect
 ```
 
-This prints each country's COCO category table with a KEEP/drop marker.
+This reports, per country, whether the annotations are VOC or COCO, how many
+images carry target-class boxes, and the per-class box counts.
 
-> **The trap this avoids:** RDD2022 declares 8 categories, and `category_id` is
-> **not** the class index. D40 (pothole) is `category_id 7`, not 3. Code that
-> assumes `category_id == target_class` trains a pothole detector on crosswalk
-> blur. The script parses the `Dxx` code out of each category name instead.
+> **The traps this avoids:**
+>
+> 1. The official release ships **Pascal VOC XML**, not `coco.json`. A
+>    COCO-only script finds nothing and reports an empty dataset.
+> 2. `category_id` is **not** the class index. D40 (pothole) is 4 in
+>    `label_map.pbtxt` but 7 in common COCO re-uploads. The script resolves the
+>    D-code from the class *name* in both formats.
 
 ---
 
