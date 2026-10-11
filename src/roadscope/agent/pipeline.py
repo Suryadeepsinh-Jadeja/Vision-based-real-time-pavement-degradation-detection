@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 
 from ..config import Settings
+from ..fusion.fuser import DefectFuser
 from ..geo.kalman import LatLonKalman
 from ..geo.quality import GPSFix, gate_fix
 from ..logging_setup import get_logger
@@ -34,10 +35,8 @@ from ..transport.topics import (
     TOPIC_DETECTION,
     TOPIC_GPS,
     TOPIC_STATUS,
-    DetectionPayload,
     GPSPayload,
     StatusPayload,
-    new_detection_id,
     topic_for,
     utc_now,
 )
@@ -70,6 +69,18 @@ class EdgePipeline:
 
         self.trip_id = trip_id or f"trip-{settings.device_id}-{int(time.time())}"
         self.health = HealthStats()
+
+        # Detections arrive every frame; only confirmed, deduplicated defects
+        # are transmitted. At ~7.9 fps a single pothole would otherwise become
+        # roughly eight records per second of driving past it.
+        self.fuser = DefectFuser(
+            geofence_radius_m=settings.geofence_m,
+            iou_threshold=settings.iou_match_threshold,
+            min_hits=settings.track_min_frames,
+            max_age_s=settings.track_max_age_s,
+            thumb_dir=settings.thumb_dir,
+        )
+        self._frame_index = 0
 
         # Bounded, drop-oldest: stale frames are worthless.
         self._queue: queue.Queue = queue.Queue(maxsize=settings.queue_size)
@@ -236,28 +247,20 @@ class EdgePipeline:
             log.debug("detections without a GPS fix yet: %d", len(detections))
             return
 
-        for detection in detections:
-            x1, y1, x2, y2 = detection.bbox
-            payload = DetectionPayload(
-                detection_id=new_detection_id(),
-                device_id=self.settings.device_id,
-                trip_id=self.trip_id,
-                frame_id=None,
-                ts_utc=utc_now(),
-                lat=lat,
-                lon=lon,
-                class_code=detection.class_code,
-                confidence=round(detection.confidence, 3),
-                gps_accuracy_m=accuracy,
-                bbox=[int(x1), int(y1), int(x2), int(y2)],
-                model_version=self.detector.engine_name,
-            ).to_dict()
-            self.outbox.enqueue(
-                topic_for(
-                    self.settings.mqtt_topic_prefix, self.settings.device_id, TOPIC_DETECTION
-                ),
-                payload,
-            )
+        # Fuse, geofence and transmit only confirmed, deduplicated defects.
+        records = self.fuser.process_frame(
+            frame,
+            detections,
+            ts=t_mono,
+            frame_index=self._frame_index,
+            position=(lat, lon, accuracy),
+            model_version=self.detector.engine_name,
+        )
+        self._frame_index += 1
+
+        topic = topic_for(self.settings.mqtt_topic_prefix, self.settings.device_id, TOPIC_DETECTION)
+        for record in records:
+            self.outbox.enqueue(topic, record.to_payload(self.settings.device_id, self.trip_id))
 
     # -- transmission ------------------------------------------------------
     def _publish_loop(self) -> None:
