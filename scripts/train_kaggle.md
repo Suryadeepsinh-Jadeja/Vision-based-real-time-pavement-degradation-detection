@@ -47,9 +47,13 @@ If ranged requests are blocked for any reason, fall back to §2b (full download)
 ## 1. Create the notebook
 
 1. **New Notebook** → *Add Input* → skip (none needed; we fetch directly)
-2. **Settings** → **Accelerator: GPU T4 ×2** — both, DDP roughly halves wall clock
-3. **Settings** → **Internet: On** — required for the figshare download
-4. **Settings** → persistence is unnecessary; cache results as a dataset instead
+2. **Session options** (right sidebar) → **Accelerator: GPU T4 ×2** — both, DDP roughly halves wall clock
+3. **Session options** → **Persistence: Variables and Files** — so `/kaggle/working` survives a
+   session reset and you do not re-download 2 GB for each of runs r2/r3/r4
+4. Confirm **Internet: On**
+
+Measured on Kaggle (Oct 2026): `torch 2.11.0+cu128`, 2 × Tesla T4 at 15.6 GB each,
+30 h/week GPU quota, and **only 20 GB on `/kaggle/working`**.
 
 Cell 1 — confirm the environment:
 
@@ -64,8 +68,19 @@ print("disk:")
 print(subprocess.run(["df","-h","/kaggle/working"],capture_output=True,text=True).stdout)
 ```
 
-Expect `devices: 2`. Each T4 has ~16 GB. You need only **~7 GB of disk** with the
-ranged download below.
+### Disk budget — 20 GB is the binding constraint
+
+| Stage | Cumulative |
+| --- | --- |
+| 3 nested zips downloaded | 2.04 GB |
+| + extracted countries | ~4.1 GB |
+| + curated copy (curation copies each image) | **~6.1 GB ← peak** |
+| after `rm -rf` of raw data | ~2.0 GB |
+| + runs / weights / plots | ~2.5 GB |
+
+Peak is ~6.5 GB of 20 GB. The ranged download is what makes this comfortable — the
+full-download fallback peaks near 17.3 GB and leaves almost nothing for training, so
+prefer ranged requests if you hit a space error.
 
 ---
 
