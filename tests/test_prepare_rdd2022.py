@@ -270,3 +270,32 @@ def test_rejects_unknown_country(prepare, tmp_path):
         prepare.main(
             ["--src", str(tmp_path), "--dst", str(tmp_path / "x"), "--countries", "Atlantis"]
         )
+
+
+def test_dropped_no_target_is_reported(prepare, tmp_path):
+    """Images with only non-target classes must be counted, not silently lost.
+
+    Regression: the counter was vestigial and always read 0, so a run that
+    dropped 44% of the dataset reported "dropped, no target: 0". Observed on the
+    real data: India 7,706 -> 3,223 kept, Japan 10,506 -> 7,900 kept.
+    """
+    root = tmp_path / "RDD2022"
+    train = root / "India" / "train"
+    # Two images carry a target class, one carries only D43 (crosswalk blur).
+    write_voc(train / "annotations" / "xmls", "I_0", "I_0.jpg", [("D40", 10, 10, 110, 90)])
+    make_image(train / "images", "I_0.jpg")
+    write_voc(train / "annotations" / "xmls", "I_1", "I_1.jpg", [("D00", 10, 10, 110, 90)])
+    make_image(train / "images", "I_1.jpg")
+    write_voc(train / "annotations" / "xmls", "I_2", "I_2.jpg", [("D43", 10, 10, 110, 90)])
+    make_image(train / "images", "I_2.jpg")
+
+    data = prepare.load_annotations(train)
+    assert data is not None
+    assert data.total_seen == 3
+    assert len(data.images) == 2
+    assert data.dropped_no_target == 1
+
+    out = tmp_path / "curated"
+    prepare.main(["--src", str(root), "--dst", str(out), "--val-fraction", "0.0"])
+    assert len(list(out.rglob("*.txt"))) == 2
+    assert not (out / "images" / "train" / "I_2.jpg").exists()

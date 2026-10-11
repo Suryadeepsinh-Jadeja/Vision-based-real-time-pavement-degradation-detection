@@ -75,10 +75,20 @@ class ImageAnnotations:
 
 @dataclass
 class CountryAnnotations:
-    """Every annotation for one country, normalised across formats."""
+    """Every annotation for one country, normalised across formats.
+
+    ``images`` holds only those carrying at least one target-class box;
+    ``total_seen`` counts every annotation file, so the difference is the
+    number dropped for containing only non-target classes (repair, blur, ...).
+    """
 
     images: list[ImageAnnotations] = field(default_factory=list)
     source_format: str = "unknown"
+    total_seen: int = 0
+
+    @property
+    def dropped_no_target(self) -> int:
+        return self.total_seen - len(self.images)
 
 
 @dataclass
@@ -90,6 +100,7 @@ class Stats:
     dropped_missing_file: int = 0
     boxes: Counter = field(default_factory=Counter)
     per_country_images: Counter = field(default_factory=Counter)
+    per_country_dropped: Counter = field(default_factory=Counter)
     # Nested tally needs a defaultdict: a plain Counter returns 0 for a missing
     # key, so indexing into it to build a nested count raises TypeError.
     per_country_boxes: defaultdict[str, Counter] = field(
@@ -99,7 +110,10 @@ class Stats:
     def report(self) -> str:
         lines = ["", "=" * 64, "RDD2022 curation report", "=" * 64]
         lines.append(f"images kept        : {self.images}")
-        lines.append(f"dropped, no target : {self.dropped_no_target}")
+        lines.append(
+            f"dropped, no target : {self.dropped_no_target:,}"
+            "  (images containing only repair / blur / other non-RDDC classes)"
+        )
         lines.append(f"dropped, no file   : {self.dropped_missing_file}")
         lines.append("")
         lines.append("box counts (class -> n):")
@@ -110,7 +124,10 @@ class Stats:
         lines.append("")
         lines.append("per country:")
         for country in sorted(self.per_country_images):
-            lines.append(f"  {country:<16} images {self.per_country_images[country]:>6}")
+            lines.append(
+                f"  {country:<16} kept {self.per_country_images[country]:>6,}"
+                f"   dropped {self.per_country_dropped[country]:>6,}"
+            )
             detail = ", ".join(
                 f"{c}={n}" for c, n in sorted(self.per_country_boxes[country].items())
             )
@@ -174,7 +191,10 @@ def load_coco(coco_path: Path) -> CountryAnnotations:
         if code in TARGET_CLASSES:
             anns_by_image[int(ann["image_id"])].append(ann)
 
-    out = CountryAnnotations(source_format=f"coco (categories {len(cat_map)})")
+    out = CountryAnnotations(
+        source_format=f"coco (categories {len(cat_map)})",
+        total_seen=len(coco.get("images", [])),
+    )
     for img in coco.get("images", []):
         boxes = []
         for ann in anns_by_image.get(int(img["id"]), []):
@@ -201,6 +221,7 @@ def load_voc(xml_dir: Path) -> CountryAnnotations:
     """
     out = CountryAnnotations(source_format="voc")
     for xml_path in sorted(xml_dir.glob("*.xml")):
+        out.total_seen += 1
         try:
             root = ET.parse(xml_path).getroot()
         except ET.ParseError as exc:
@@ -298,7 +319,13 @@ def curate_country(
     if data is None:
         print(f"  ! {country}: no annotations found under {train_dir}")
         return False
-    print(f"  {country}: {len(data.images)} annotated images ({data.source_format})")
+    print(
+        f"  {country}: {len(data.images):,} images with target classes "
+        f"of {data.total_seen:,} annotated ({data.dropped_no_target:,} dropped "
+        f"as repair/blur only) [{data.source_format}]"
+    )
+    stats.dropped_no_target += data.dropped_no_target
+    stats.per_country_dropped[country] = data.dropped_no_target
 
     rng = random.Random(seed)
     rng.shuffle(data.images)
@@ -368,7 +395,10 @@ def inspect(src: Path, countries: tuple[str, ...]) -> int:
             for item in data.images:
                 for code, _ in item.boxes:
                     codes[code] += 1
-            print(f"  images    : {len(data.images)} with target annotations")
+            print(
+                f"  images    : {len(data.images):,} with target classes"
+                f" of {data.total_seen:,} annotated"
+            )
             print(
                 "  classes   : "
                 + ", ".join(f"{c}={codes.get(c, 0)}" for c in ("D00", "D10", "D20", "D40"))
