@@ -221,7 +221,7 @@ model.train(
     translate=0.1,
     scale=0.5,
     fliplr=0.5,               # horizontal only — roads have no vertical flip
-    fliud=0.0,
+    flipud=0.0,
     mosaic=1.0,
     mixup=0.1,
     copy_paste=0.1,           # pothole oversampling
