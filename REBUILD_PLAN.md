@@ -296,7 +296,18 @@ India — the relevant domain for this project — has 68 transverse-crack label
 
 ### 5.4 Model and training config
 
-Use **`YOLOv8m-seg`** — segmentation, not detection alone, because the mask is what enables real crack width/length measurement in W2, which is what makes ASTM severity defensible.
+> **Corrected 11 Oct 2026 after a real training attempt.** This originally specified
+> `YOLOv8m-seg`, reasoning that masks would enable crack width/length measurement in
+> W2. **RDD2022 ships bounding boxes only**, and Ultralytics requires >=3-point
+> polygon labels for `-seg` training. It fails immediately with
+> `Segment dataset requires equal numbers of boxes and segments, but got len(segments) = 0`.
+> A 5-minute smoke run caught it instead of a 3-hour one.
+>
+> Converting each box to a 4-point rectangle would train, but the resulting "mask"
+> is a rectangle, so W2 would report *box* width as crack width -- silently wrong,
+> which is worse than absent. Detect-only is the honest call. See §6.2 for the
+> Phase 4 consequence and the SAM 2 workaround.
+Use **`YOLOv8m`** — detect-only. RDD2022 has no polygon masks (see the correction above).
 
 ```yaml
 # models/rdd2022_roadscope.yaml — dataset config
@@ -312,11 +323,12 @@ names:
 
 ```python
 # train config highlights
-model = "yolov8m-seg.pt"
-epochs = 80
+model = "yolov8m.pt"                # detect-only; RDD2022 has no polygons
+epochs = 60
 imgsz = 960              # RDD2022 native is 600-720; upscale to catch thin cracks
-batch = 8
-device = "cuda"
+batch = 16               # total across both GPUs
+device = [0, 1]          # DDP
+cache = "disk"           # NOT "ram": 12,743 imgs at 960px = ~35 GB > 30 GB RAM
 patience = 15
 
 hsv_h = 0.015            # lighting varies hugely on Indian roads
@@ -378,11 +390,22 @@ Turn pixels into metres. Currently impossible.
 
 Cross-check against a known reference: measure a 1 m object at a fixed distance.
 
-### 6.2 Geometry from segmentation masks
+### 6.2 Geometry
 
-- Skeletonise the mask → crack **length** in metres
-- Distance transform → mean **width** in millimetres
-- Pothole: convex-hull area in m², equivalent diameter in metres
+**Available from a bounding box** (via the §6.1 homography):
+- Defect **area** (m²) — box area × m²/px
+- Defect **length** (m) — major axis, valid for elongated cracks
+- Pothole **equivalent diameter** (m) from area
+
+**Not available from a box** — see the 5.4 correction:
+- Crack **width** (mm). A 3 mm crack fills a box tens of pixels wide.
+
+Width drives ASTM crack severity, so Phase 4 needs one of:
+1. **SAM 2 zero-shot masks** prompted by the detector's box — no new labelling, preferred
+2. **~200 hand-labelled polygons** on the in-domain set, train a small seg head
+
+Interim: derive severity from area and length, and state in the results document
+that width is unavailable. **Never substitute box width for crack width.**
 
 ### 6.3 Severity per ASTM D6433
 
@@ -647,7 +670,7 @@ docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mo
   "frames_seen": 14, "track_duration_s": 2.8,
   "bbox": [268, 324, 380, 397],
   "road_name": "NH 44",
-  "model_version": "rdd2022-yolov8m-seg-r3"
+  "model_version": "rdd2022-yolov8m-r1"
 }
 ```
 
@@ -838,11 +861,12 @@ def metres_per_pixel(H: np.ndarray, y: int) -> float
 @dataclass
 class DefectGeometry:
     length_m: float
-    width_mm: float
-    area_m2: float
+    width_mm: float | None      # None unless a real mask is available (SAM 2)
+    area_m2: float              # always available from the box + homography
     equiv_diameter_m: float
 
-def measure(mask: np.ndarray, H: np.ndarray) -> DefectGeometry
+def measure_from_bbox(bbox, H: np.ndarray, class_code: str) -> DefectGeometry
+def measure_from_mask(mask: np.ndarray, H: np.ndarray) -> DefectGeometry
 
 # vision/detector.py
 class DefectDetector:                          # module-level singleton

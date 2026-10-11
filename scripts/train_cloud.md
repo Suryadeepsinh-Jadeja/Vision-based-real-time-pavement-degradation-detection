@@ -103,36 +103,65 @@ is a known limitation, not a bug to hide; report per-class AP.
 
 ## 4. Train
 
+> **Detect-only. RDD2022 ships bounding boxes, not polygon masks.**
+>
+> A `-seg` model requires >=3-point polygon labels and fails with:
+> `Segment dataset requires equal numbers of boxes and segments, but got len(segments) = 0`
+>
+> Converting each box into a 4-point rectangle does train -- but the resulting
+> "mask" is a rectangle, so crack-width measurement in Phase 4 would return the
+> *box* width, not the crack width. That is worse than having no mask: it looks
+> correct and silently measures wrong.
+
 ```python
 from ultralytics import YOLO
 
-model = YOLO("yolov8m-seg.pt")  # segmentation: masks enable crack width measurement
+model = YOLO("yolov8m.pt")   # detect-only: RDD2022 is bounding boxes only
 model.train(
     data="data/rdd2022-curated/roadscope.yaml",
-    epochs=80,
-    imgsz=960,  # upscale from native 600-720; thin cracks vanish otherwise
-    batch=8,
-    device="cuda",
-    patience=15,
+    epochs=60,
+    imgsz=960,          # upscale from native 600-720; thin cracks vanish otherwise
+    batch=16,
+    device=[0, 1],      # DDP; batch is the total across both GPUs
+    workers=4,
+    cache="disk",       # NOT "ram": 12,743 imgs at 960px = ~35 GB > 30 GB host RAM
     project="runs",
     name="rdd2022-roadscope-r1",
     # lighting varies enormously on Indian roads
-    hsv_h=0.015,
-    hsv_s=0.7,
-    hsv_v=0.4,
+    hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
     degrees=10.0,
     translate=0.1,
     scale=0.5,
-    fliplr=0.5,  # horizontal only — roads have no vertical flip
+    fliplr=0.5,         # horizontal only -- roads have no vertical flip
     fliud=0.0,
     mosaic=1.0,
     mixup=0.1,
-    copy_paste=0.1,  # pothole oversampling
+    copy_paste=0.1,     # pothole oversampling
     erasing=0.2,
 )
 ```
 
----
+### 4a. What losing masks costs, and the Phase 4 workaround
+
+| Quantity | From a bbox? | Notes |
+| --- | --- | --- |
+| Defect **area** (m2) | **Yes** | box area x m2/px from the ground-plane homography |
+| Defect **length** (m) | Yes, for elongated cracks | major axis of the box |
+| Defect **width** (mm) | **No** | a 3 mm crack fills a 40 px wide box |
+
+ASTM D6433 defines crack severity on width *and* length, so width cannot come
+from a box. Phase 4 options, in order of preference:
+
+1. **SAM 2 zero-shot masks.** Prompt with the detector's box, get a real mask,
+   measure width via distance transform. No new labelling.
+2. **Label ~200 polygons** on the in-domain set, train a small seg head.
+
+Interim: derive severity from area and length, and state plainly in the write-up
+that width is unavailable. Never substitute box width for crack width.
+
+The detector already treats masks as optional -- it reads
+`getattr(result, "masks", None)` -- so a detect-only model needs no code change.
+`detection.mask` is simply `None`. Verified with an 80-class COCO model.
 
 ## 5. Evaluate — per class, never just mAP
 

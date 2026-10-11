@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # --- Detection ------------------------------------------------------
     model_path: Path | None = None
-    model_name: str = "roadscope-yolov8m-seg.pt"
+    model_name: str = "roadscope-yolov8m.pt"
     conf_threshold: float = 0.35
     iou_threshold: float = 0.50
     # Measured on this 8 GB CPU-only laptop with the legacy weights:

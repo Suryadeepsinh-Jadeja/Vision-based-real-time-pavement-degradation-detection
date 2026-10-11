@@ -199,7 +199,7 @@ Two T4s via DDP:
 from ultralytics import YOLO
 import json, pathlib, shutil
 
-MODEL = "yolov8m-seg.pt"      # fall back to "yolov8m.pt" if seg training misbehaves
+MODEL = "yolov8m.pt"          # detect-only: RDD2022 ships boxes, not polygons
 RUN = "r1"
 
 model = YOLO(MODEL)
@@ -229,10 +229,15 @@ model.train(
 )
 ```
 
-**If it OOMs**, halve `batch` to 8. **If segmentation training errors out**, switch
-`MODEL` to `yolov8m.pt` — detect-only trains reliably everywhere, and the rebuild can
-ship with bounding-box severity until Phase 4 adds masks. Do not let segmentation
-block the whole project.
+**If it OOMs**, halve `batch` to 8.
+
+> **Why detect-only?** RDD2022 ships bounding boxes, not polygon masks. A `-seg`
+> model requires >=3-point polygons and fails with:
+> `Segment dataset requires equal numbers of boxes and segments, but got len(segments) = 0`
+> Converting boxes to 4-point rectangles would train, but the "mask" would be a
+> rectangle — so Phase 4 crack-width measurement would report *box* width and
+> silently be wrong. Consequence and the SAM 2 workaround are in
+> `scripts/train_cloud.md` section 4a.
 
 Expected wall clock on 2× T4: **3–5 hours** for 60 epochs on ~24k images.
 

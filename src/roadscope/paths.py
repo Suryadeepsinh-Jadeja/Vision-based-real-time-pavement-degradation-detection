@@ -35,6 +35,7 @@ _ROOT_MARKERS = ("pyproject.toml", ".git")
 #: Candidate weight filenames, in search order.
 MODEL_CANDIDATES: tuple[str, ...] = (
     "best.pt",
+    "roadscope-yolov8m.pt",
     "roadscope-yolov8m-seg.pt",
     "pothole_yolov8.pt",
     "yolov8m-seg.pt",
