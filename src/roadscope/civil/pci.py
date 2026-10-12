@@ -76,16 +76,37 @@ class Defect:
     detection_id: str | None = None
 
     @classmethod
-    def from_record(cls, row: dict[str, Any]) -> Defect:
+    def from_record(cls, row: Any) -> Defect:
+        """Build a :class:`Defect` from a stored record.
+
+        Accepts either a mapping (a row out of the server database, or the
+        payload the agent published) or a
+        :class:`roadscope.fusion.fuser.DefectRecord`.
+
+        This is the seam between Phase 3/5 output and the ASTM D6433 engine.
+        It matters that it accepts both: the agent produces dataclass records
+        in memory while the server reads rows from SQLite, and both must reach
+        the same calculation. An earlier version accepted only mappings, so
+        passing a record straight through raised
+        ``AttributeError: 'DefectRecord' object has no attribute 'get'`` --
+        and the unit tests missed it because they all built
+        :class:`Defect` literals directly instead of exercising this path.
+        """
+        get = row.get if isinstance(row, dict) or hasattr(row, "keys") else _attrgetter(row)
+
+        class_code = get("class_code", None) or "D40"
+        area_m2 = get("area_m2", None)
         return cls(
-            class_code=row.get("class_code", "D40"),
-            severity=row.get("severity") or "M",
-            lat=float(row["lat"]),
-            lon=float(row["lon"]),
-            length_m=row.get("length_m"),
-            width_mm=row.get("width_mm"),
-            area_m2=row.get("area_m2"),
-            equiv_diameter_m=_diameter_from_area(row.get("area_m2")),
+            class_code=class_code,
+            severity=get("severity", None) or "M",
+            lat=float(get("lat", 0.0)),
+            lon=float(get("lon", 0.0)),
+            length_m=get("length_m", None),
+            width_mm=get("width_mm", None),
+            area_m2=area_m2,
+            equiv_diameter_m=_diameter_from_area(area_m2),
+            depth_mm=get("depth_mm", None),
+            detection_id=get("detection_id", None),
         )
 
     def geometry(self) -> Geometry:
@@ -102,6 +123,15 @@ def _diameter_from_area(area_m2: float | None) -> float | None:
     if not area_m2 or area_m2 <= 0:
         return None
     return 2.0 * math.sqrt(area_m2 / math.pi)
+
+
+def _attrgetter(obj: Any):
+    """Return a ``get(key, default)``-shaped accessor for a plain object."""
+
+    def get(key: str, default: Any = None) -> Any:
+        return getattr(obj, key, default)
+
+    return get
 
 
 @dataclass(slots=True)
@@ -259,7 +289,16 @@ def compute_pci(
     A corridor of uniform quality scores the same either way; a corridor with
     one bad stretch only differs because averaging over units stops kilometres
     of good road from hiding it.
+
+    ``defects`` accepts :class:`Defect`, a ``DefectRecord`` from the fusion
+    layer, or a database row, and is normalised here. Requiring the caller to
+    convert first was a live bug: passing a fusion record -- the actual output
+    of Phases 3 and 5 -- raised ``AttributeError: 'NoneType' object has no
+    attribute 'upper'`` on its ``severity`` field, because ``DefectRecord``
+    leaves severity unset when the detector cannot measure it.
     """
+    defects = [d if isinstance(d, Defect) else Defect.from_record(d) for d in defects]
+
     empty: PCIResult = {
         "pci": 100.0,
         "rating": "Good",

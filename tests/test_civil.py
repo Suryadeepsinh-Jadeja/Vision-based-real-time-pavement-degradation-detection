@@ -307,3 +307,68 @@ def test_potholes_outrank_cracks_at_equal_density():
 def test_density_zero_gives_zero_deduct():
     assert deduct_value("D40", "H", 0.0) == 0.0
     assert math.isclose(density_pct(0.0, Unit.COUNT, 100.0), 0.0)
+
+
+# --- Integration with the fusion layer ---------------------------------------
+# The unit tests above all construct Defect literals directly. That left the
+# seam between Phase 3/5 output and the ASTM engine untested, and a live bug
+# survived 35 passing tests: passing a DefectRecord -- the actual type the
+# pipeline produces -- raised AttributeError on its unset severity field.
+
+
+def _record(**kw):
+    from roadscope.fusion.fuser import DefectRecord
+
+    base = dict(
+        detection_id="det-1",
+        class_code="D40",
+        confidence=0.82,
+        lat=23.0225,
+        lon=72.5714,
+        gps_accuracy_m=6.0,
+        frames_seen=4,
+        track_duration_s=0.8,
+    )
+    base.update(kw)
+    return DefectRecord(**base)
+
+
+def test_compute_pci_accepts_a_fusion_record():
+    """The real input type must not crash the engine."""
+    result = compute_pci([_record()])
+    assert result["pci"] < 100.0
+    assert result["rating"]
+
+
+def test_compute_pci_accepts_a_database_row():
+    result = compute_pci([{"class_code": "D40", "lat": 23.02, "lon": 72.57, "area_m2": 0.09}])
+    assert result["pci"] < 100.0
+
+
+def test_compute_pci_accepts_mixed_input_types():
+    result = compute_pci(
+        [
+            _record(),
+            {"class_code": "D00", "lat": 23.0210, "lon": 72.5700, "severity": "M"},
+            Defect("D20", "H", 23.0230, 72.5720),
+        ]
+    )
+    assert result["pci"] < 100.0
+
+
+def test_unmeasurable_depth_is_reported_as_a_limitation():
+    """A default severity must never be presented as a measurement."""
+    result = compute_pci([_record()])
+    assert result["limitations"], "defaulting severity without saying so is dishonest"
+    assert any("depth" in lim for lim in result["limitations"])
+
+
+def test_record_and_dict_agree():
+    """Both input shapes must produce the same score for the same defect."""
+    record = _record(area_m2=0.09)
+    row = {"class_code": "D40", "lat": 23.0225, "lon": 72.5714, "area_m2": 0.09}
+    assert compute_pci([record])["pci"] == compute_pci([row])["pci"]
+
+
+def test_from_record_preserves_detection_id():
+    assert Defect.from_record(_record(detection_id="xyz")).detection_id == "xyz"

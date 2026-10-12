@@ -1508,12 +1508,45 @@ oversampling hypothesis that the data then refuted.
 ### Phase 4 — Civil Engine ✅
 
 ASTM D6433 PCI implemented and validated against the published worked example:
-DVs 4 / 17 / 13 and TDV 34 exact, TM 5-623 CDV 33 exact. 109 tests pass.
+DVs 4 / 17 / 13 and TDV 34 exact, TM 5-623 CDV 33 exact. 122 tests pass.
 
 Delivered: `civil/{distress,severity,dv_tables,cdv,pci}.py`. Zero detector
 dependency, which is why it completed without waiting on the model.
 
+#### Fixed: the fusion → civil seam was broken
+
+`compute_pci()` accepted only `Defect` literals. Passing a `DefectRecord` —
+the actual output of Phases 3 and 5 — raised
+`AttributeError: 'NoneType' object has no attribute 'upper'`, because
+`DefectRecord.severity` is `None` whenever the detector cannot measure it.
+
+`Defect.from_record()` existed to bridge this but was **dead code**, never
+called, and only accepted mappings. All 35 civil tests built `Defect` literals
+directly, so the real input path was untested. Normalisation now happens at the
+`compute_pci()` entry point and accepts records, rows, or `Defect`. Five
+regression tests cover it; each fails when the normalisation is removed.
+
+#### GPS gate measured
+
+Plan gate is *drift < 5% over 2 km*. Driving 2 km at 40 km/h, sampled at 1 Hz,
+with injected Gaussian GPS error at the filter's own default (σ = 10 m):
+
+| Metric | Raw GPS | Filtered |
+|---|---|---|
+| Mean error | 12.81 m | 7.84 m |
+| 95th percentile | 27.68 m | 15.77 m |
+| Final fix | 18.44 m | **0.87 m** |
+| Improvement | — | 38.8% mean |
+
+Gate threshold is 100 m of final error over 2 km. Raw passes at 18.4 m,
+filtered at 0.87 m.
+
+**This is a simulation, not a field measurement.** It validates the filter
+against a known-noise model; it does not establish what your phone's GPS
+actually does. The before/after comparison needs real tracks.
+
 #### Still open for Phase 4
 
-- [ ] Streamlit dashboard: DB-backed, condition polyline, work orders with road names.
-- [ ] GPS before/after field measurement (drift < 5% over 2 km).
+- [ ] Streamlit dashboard: DB-backed, condition polyline, work orders with road
+      names. `src/roadscope/ui/` exists but is an empty placeholder.
+- [ ] Field GPS measurement from real tracks.
