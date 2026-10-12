@@ -68,10 +68,14 @@ def _diagnose(settings) -> int:
         print("  detector          : UNAVAILABLE (no weights)")
         return 1
 
-    detector = DefectDetector.instance(resolved)
+    detector = DefectDetector.instance(
+        resolved, None if settings.device == "auto" else settings.device
+    )
     print(f"  detector          : {detector.engine_name}")
     if detector.available:
         print(f"  model classes     : {detector.names}")
+        print(f"  inference device  : {detector.resolve_device()}")
+        print(f"  inference size    : {settings.imgsz}px")
     else:
         print("  detector          : FAILED TO LOAD (is the 'yolo' extra installed?)")
         return 1

@@ -119,7 +119,55 @@ then refuted.
 
 ---
 
-## 4. Honest limitations
+## 4. Measured inference cost on the target machine
+
+Apple M1, 8 GB, 8 threads, `rdd2022-yolov8m-r1.pt`, median over 25 frames.
+Reproduce with `scripts/benchmark_detector.py`.
+
+| imgsz | CPU median | CPU fps | MPS median | MPS fps | MPS speedup |
+|---|---|---|---|---|---|
+| 640 | 149 ms | 6.7 | 69 ms | 14.4 | 2.1× |
+| 768 | 259 ms | 3.9 | — | — | — |
+| **960** | **303 ms** | **3.3** | **125 ms** | **8.0** | **2.4×** |
+| 1280 | 547 ms | 1.8 | 202 ms | 5.0 | 2.7× |
+
+### Frame drop rate against 30 fps capture
+
+| imgsz | CPU drop | MPS drop |
+|---|---|---|
+| 640 | 78% | 52% |
+| 960 | 89% | 73% |
+| 1280 | 94% | 83% |
+
+Inference remains the binding constraint. Even at 960 on MPS the agent can only
+process 8 of every 30 captured frames.
+
+### Why 960 is now the default
+
+The earlier default of 640 was chosen when the RDD2022 detector did not exist,
+and its comment said to raise it *"once the RDD2022 model is trained."* That
+condition is now met. 960 matches the resolution r1 was trained and validated at,
+and §3 identifies pothole localisation — not class frequency — as the binding
+constraint, which is the one thing resolution improves.
+
+### `Settings.device` was dead configuration
+
+The field existed in config but was never passed to ultralytics, which
+auto-selects a device and lands on CPU even where MPS is available. Every
+measurement above was therefore being taken on the CPU path while an
+Apple GPU sat idle. Wired through, MPS is 2.1–2.7× faster.
+
+Verified safe rather than assumed: running the same random input through the
+model on both devices gives a maximum relative difference of **9.6e-07**, with
+identical detection counts at every confidence threshold.
+
+Thread count was also tested and made no difference (150 ms at 1 thread and at 8);
+a standalone 2048³ matmul showed the same flat scaling, so this is the M1's
+single-core throughput rather than a configuration error.
+
+---
+
+## 5. Honest limitations
 
 | Limitation | Detail |
 |---|---|
@@ -128,11 +176,12 @@ then refuted.
 | Crack severity incomplete | RDD2022 is bounding-box only, so crack width cannot be derived. Severity falls back to a default and `compute_pci()["limitations"]` reports it. Box width is never substituted for crack width. |
 | GPS not field-validated | Kalman filter and quality gating are unit-tested; the before/after field measurement (§14 of the plan) has not been run. |
 | Synthetic-source pipeline | Capture has been verified against a synthetic source and a video file. The live phone MJPEG link has not been exercised. |
+| Benchmark frames are synthetic | The latency table above was measured on the procedural road scene, which has little texture. Latency depends on input tensor shape rather than content, so the timings are sound; the detections-per-frame column is not meaningful on these frames and needs real footage. |
 | Per-object ground position | One GPS position per frame, not per object. Two defects in one frame share a position; per-object positions need the Phase 6 homography. |
 
 ---
 
-## 5. Reproducing
+## 6. Reproducing
 
 ```bash
 python scripts/prepare_rdd2022.py --src /kaggle/working/RDD2022 --dst /kaggle/working/rdd2022-curated

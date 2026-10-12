@@ -22,6 +22,21 @@ from ..logging_setup import get_logger
 
 log = get_logger(__name__)
 
+
+def _torch():
+    """Import torch lazily.
+
+    Importing it eagerly costs ~1.5 s at ``import roadscope``, and torch is only
+    needed once the detector actually loads weights. ``ultralytics`` pulls it in
+    anyway, so this is purely to keep module import cheap and optional.
+    """
+    try:
+        import torch
+    except ImportError:
+        return None
+    return torch
+
+
 CLASS_CODES = {0: "D00", 1: "D10", 2: "D20", 3: "D40"}
 RDD_CLASS_NAME_MAP = {
     "D00": "Longitudinal Crack",
@@ -57,8 +72,10 @@ class DefectDetector:
     _lock = threading.Lock()
     load_count = 0
 
-    def __init__(self, model_path: Path | None = None) -> None:
+    def __init__(self, model_path: Path | None = None, device: str | None = None) -> None:
         self.model_path = model_path
+        #: Resolved on first use by :meth:`resolve_device`; None means "auto".
+        self.device: str | None = device
         self.model: Any = None
         self.names: dict[int, str] = {}
         self.engine_name = "unavailable"
@@ -66,12 +83,12 @@ class DefectDetector:
         log.debug("Detector instantiated (load_count=%d)", type(self).load_count)
 
     @classmethod
-    def instance(cls, model_path: Path | None = None) -> DefectDetector:
+    def instance(cls, model_path: Path | None = None, device: str | None = None) -> DefectDetector:
         """Return the process-wide detector, constructing it on first call."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = cls(model_path)
+                    cls._instance = cls(model_path, device)
                     cls._instance._load()
         return cls._instance
 
@@ -138,6 +155,48 @@ class DefectDetector:
             return "D40"
         return CLASS_CODES.get(class_id, "D40")
 
+    def resolve_device(self, requested: str | None = None) -> str:
+        """Pick the torch device, falling back when the request is unusable.
+
+        ``Settings.device`` used to be ignored entirely -- it was never passed
+        to ultralytics, which auto-selects and lands on CPU even on Apple
+        Silicon where MPS is available and 2-3x faster. See
+        ``scripts/benchmark_detector.py`` for the measurements.
+
+        Silently downgrading a device the caller asked for would be worse than
+        the original bug, so the fallback is logged.
+        """
+        if self.device is not None:
+            return self.device
+
+        torch = _torch()
+        if torch is None:
+            return "cpu"
+
+        if requested:
+            candidate = str(requested).lower()
+        elif torch.backends.mps.is_available():
+            candidate = "mps"
+        elif torch.cuda.is_available():
+            candidate = "0"
+        else:
+            candidate = "cpu"
+
+        try:
+            torch.empty(0, device=candidate)
+        except Exception as exc:
+            log.warning(
+                "device %r is unusable (%s); falling back to cpu. Set ROADSCOPE_DEVICE to "
+                "override.",
+                candidate,
+                exc,
+            )
+            candidate = "cpu"
+
+        self.device = candidate
+        log.info("detector device: %s", candidate)
+        return candidate
+
     def infer(
         self,
         frame: Any,
@@ -150,7 +209,14 @@ class DefectDetector:
             raise DetectorUnavailable(
                 "Detector has no weights loaded. Fetch weights or set ROADSCOPE_MODEL_PATH."
             )
-        results = self.model(frame, conf=conf, iou=iou, imgsz=imgsz, verbose=False)
+        results = self.model(
+            frame,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            verbose=False,
+            device=self.resolve_device(self.device),
+        )
         detections: list[Detection] = []
         for result in results:
             boxes = getattr(result, "boxes", None)

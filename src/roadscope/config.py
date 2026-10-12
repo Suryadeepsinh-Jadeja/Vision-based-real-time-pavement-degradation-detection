@@ -48,13 +48,24 @@ class Settings(BaseSettings):
     model_name: str = "rdd2022-yolov8m-r1.pt"
     conf_threshold: float = 0.35
     iou_threshold: float = 0.50
-    # Measured on this 8 GB CPU-only laptop with the legacy weights:
-    #   imgsz=640 -> 127 ms/frame (7.9 fps)
-    #   imgsz=960 -> 263 ms/frame (3.8 fps)
-    # Default to 640 so the agent reaches a usable rate without a GPU. Raise to
-    # 960 on a CUDA machine, or once the RDD2022 model is trained (Phase 3).
-    imgsz: int = 640
-    device: str = "cpu"
+    # Measured on this Apple M1 (8 GB) with rdd2022-yolov8m-r1.pt, median over
+    # 25 frames via scripts/benchmark_detector.py:
+    #
+    #   imgsz    CPU       MPS (Apple GPU)
+    #   640      149 ms    72 ms
+    #   960      303 ms   125 ms
+    #   1280     547 ms   202 ms
+    #
+    # 960 matches the resolution r1 was trained at, and docs/results.md shows
+    # the pothole class is localisation-limited -- the failure mode resolution
+    # actually helps. Hence the default. The cost is throughput: on CPU 960
+    # sustains 3.3 fps against 30 fps capture, so ~89% of frames are dropped;
+    # on MPS the same setting reaches 8.0 fps. Drop to 640 for CPU-only use.
+    imgsz: int = 960
+    #: torch device. "auto" selects MPS on Apple Silicon, CUDA when present,
+    #: else CPU. Override via ROADSCOPE_DEVICE; an unusable request falls back
+    #: to CPU with a warning rather than aborting the run.
+    device: str = "auto"
 
     # --- Pipeline -------------------------------------------------------
     queue_size: int = 8

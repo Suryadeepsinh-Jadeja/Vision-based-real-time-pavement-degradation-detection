@@ -44,6 +44,54 @@ def test_detector_does_not_raise_without_weights(tmp_path, monkeypatch):
     assert detector.engine_name == "unavailable"
 
 
+def test_explicit_device_is_honoured():
+    """An explicit device request must be returned unchanged."""
+    detector = DefectDetector()
+    assert detector.resolve_device("cpu") == "cpu"
+
+
+def test_auto_device_is_resolved_and_cached():
+    """auto must pick a real device, resolve it once, and cache the result.
+
+    Regression guard. ``Settings.device`` was previously dead config: the value
+    never reached ultralytics, which auto-selects and lands on CPU even on
+    Apple Silicon. MPS measured 2.1-2.7x faster than CPU here.
+    """
+    detector = DefectDetector()
+    first = detector.resolve_device()
+    assert first in {"cpu", "mps", "0"}
+    assert detector.device == first
+    assert detector.resolve_device() == first
+
+
+def test_unusable_device_falls_back_to_cpu():
+    """A device that cannot be allocated degrades to CPU instead of crashing.
+
+    Silently swapping devices would be worse than the original bug, so the
+    fallback must be real -- but it must still run rather than abort a capture.
+    """
+    detector = DefectDetector()
+    assert detector.resolve_device("cuda:999") == "cpu"
+
+
+def test_settings_device_reaches_the_detector(monkeypatch):
+    """Settings.device='auto' must not be passed through as a literal.
+
+    'auto' is our sentinel, not a torch device name. Passing it straight to
+    ultralytics would raise on every frame.
+    """
+    from roadscope.config import Settings
+
+    assert Settings().device == "auto"
+
+
+def test_default_inference_matches_training_resolution():
+    """imgsz must stay 960: r1 was trained there and potholes are localisation-limited."""
+    from roadscope.config import Settings
+
+    assert Settings().imgsz == 960
+
+
 def test_single_class_model_maps_to_pothole():
     """Legacy weights have one class named '0'; that can only be a pothole."""
     detector = DefectDetector.instance()

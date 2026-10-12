@@ -63,7 +63,10 @@ class EdgePipeline:
     ) -> None:
         self.settings = settings
         self.source = source or build_source(settings.camera_url)
-        self.detector = detector or DefectDetector.instance(settings.resolved_model_path())
+        self.detector = detector or DefectDetector.instance(
+            settings.resolved_model_path(),
+            None if settings.device == "auto" else settings.device,
+        )
         self.publisher = publisher
         self.outbox = Outbox(settings.outbox_db)
 
