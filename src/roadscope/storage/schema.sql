@@ -76,16 +76,21 @@ CREATE TABLE IF NOT EXISTS detections (
 CREATE INDEX IF NOT EXISTS idx_det_trip_ts ON detections (trip_id, ts_utc);
 CREATE INDEX IF NOT EXISTS idx_det_class ON detections (class_code);
 
+-- Sample units are numbered per trip ("unit-001"), so unit_id alone is NOT
+-- unique: two trips both produce unit-001. The primary key must include the
+-- trip, or scoring a second trip silently overwrites the first trip's results
+-- via INSERT OR REPLACE.
 CREATE TABLE IF NOT EXISTS sample_units (
-    unit_id          TEXT PRIMARY KEY,
     trip_id          TEXT NOT NULL REFERENCES trips(trip_id) ON DELETE CASCADE,
+    unit_id          TEXT NOT NULL,
     chainage_start_m REAL,
     chainage_end_m   REAL,
     area_m2          REAL,
     tdv              REAL,
     cdv              REAL,
     pci              REAL,
-    rating           TEXT
+    rating           TEXT,
+    PRIMARY KEY (trip_id, unit_id)
 );
 
 -- Device-reported health, one row per status heartbeat. Retained so the

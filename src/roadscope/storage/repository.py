@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..geo.quality import haversine_m
 from .db import init_db, thread_connection, transaction
 
 __all__ = [
@@ -237,6 +238,135 @@ class Repository:
         return self._conn.execute(
             "SELECT * FROM detections ORDER BY ts_utc DESC LIMIT 1"
         ).fetchone()
+
+    # -- survey results ----------------------------------------------------
+    def insert_sample_unit(self, trip_id: str, unit: dict[str, Any]) -> bool:
+        """Persist one scored sample unit.
+
+        Idempotent on ``unit_id`` so recomputing a trip's PCI (the dashboard
+        recomputes on demand, and a trip can gain late detections) overwrites
+        rather than duplicates.
+        """
+        with transaction(self.db_path) as conn:
+            cur = conn.execute(
+                "INSERT OR REPLACE INTO sample_units"
+                " (trip_id, unit_id, chainage_start_m, chainage_end_m, area_m2,"
+                "  tdv, cdv, pci, rating)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    trip_id,
+                    unit["unit_id"],
+                    unit.get("chainage_start_m"),
+                    unit.get("chainage_end_m"),
+                    unit.get("area_m2"),
+                    unit.get("tdv"),
+                    unit.get("cdv"),
+                    unit.get("pci"),
+                    unit.get("rating"),
+                ),
+            )
+            return cur.rowcount > 0
+
+    def sample_units(self, trip_id: str) -> list[sqlite3.Row]:
+        """Scored sample units for a trip, in chainage order."""
+        return list(
+            self._conn.execute(
+                "SELECT * FROM sample_units WHERE trip_id = ? ORDER BY chainage_start_m, unit_id",
+                (trip_id,),
+            )
+        )
+
+    def replace_sample_units(self, trip_id: str, units: list[dict[str, Any]]) -> int:
+        """Replace every unit for a trip with the supplied set.
+
+        A recomputation that yields fewer units than before must not leave
+        stale rows behind, so this deletes first rather than merging.
+        """
+        with transaction(self.db_path) as conn:
+            conn.execute("DELETE FROM sample_units WHERE trip_id = ?", (trip_id,))
+        for unit in units:
+            self.insert_sample_unit(trip_id, unit)
+        return len(units)
+
+    def condition_segments(self, trip_id: str) -> list[sqlite3.Row]:
+        """Contiguous stretches of road sharing one PCI rating.
+
+        Built in SQL by walking the ordered units and opening a new segment
+        whenever the rating changes. The dashboard draws one polyline per
+        segment so colour changes appear at real chainage boundaries instead of
+        being interpolated across a whole trip.
+        """
+        rows = self._conn.execute(
+            "SELECT u.*, f.lat, f.lon"
+            "  FROM sample_units u"
+            "  LEFT JOIN gps_fixes f"
+            "    ON f.trip_id = u.trip_id AND f.ts_utc = ("
+            "        SELECT MIN(g.ts_utc) FROM gps_fixes g"
+            "         WHERE g.trip_id = u.trip_id)"
+            " WHERE u.trip_id = ?"
+            " ORDER BY u.chainage_start_m, u.unit_id",
+            (trip_id,),
+        )
+        return list(rows)
+
+    def unit_geometry(self, trip_id: str) -> dict[str, list[tuple[float, float]]]:
+        """Map each unit_id to the track points it covers.
+
+        Units are assigned by chainage, so a unit's position is the stretch of
+        GPS track between its start and end chainage. Returns ``unit_id ->
+        [(lat, lon), ...]`` for the map.
+        """
+        units = self.sample_units(trip_id)
+        track = self.track(trip_id)
+        if not units or not track:
+            return {}
+
+        chainage = 0.0
+        points: list[tuple[float, tuple[float, float]]] = []
+        for i, row in enumerate(track):
+            if i:
+                chainage += haversine_m(
+                    track[i - 1]["lat"], track[i - 1]["lon"], row["lat"], row["lon"]
+                )
+            points.append((chainage, (row["lat"], row["lon"])))
+
+        geometry: dict[str, list[tuple[float, float]]] = {}
+        for unit in units:
+            start = unit["chainage_start_m"]
+            end = unit["chainage_end_m"]
+            if start is None or end is None:
+                continue
+            geometry[unit["unit_id"]] = [p for ch, p in points if start <= ch <= end]
+        return geometry
+
+    def status_history(self, device_id: str, limit: int = 500) -> list[sqlite3.Row]:
+        return list(
+            self._conn.execute(
+                "SELECT * FROM device_status WHERE device_id = ? ORDER BY ts_utc LIMIT ?",
+                (device_id, limit),
+            )
+        )
+
+    def class_summary(self, trip_id: str | None = None) -> list[sqlite3.Row]:
+        """Counts per distress class, highest first."""
+        if trip_id:
+            return list(
+                self._conn.execute(
+                    "SELECT class_code, COUNT(*) AS n, AVG(confidence) AS mean_conf"
+                    "  FROM detections WHERE trip_id = ? GROUP BY class_code"
+                    " ORDER BY n DESC",
+                    (trip_id,),
+                )
+            )
+        return list(
+            self._conn.execute(
+                "SELECT class_code, COUNT(*) AS n, AVG(confidence) AS mean_conf"
+                "  FROM detections GROUP BY class_code ORDER BY n DESC"
+            )
+        )
+
+    def detection_counts(self, trip_id: str) -> dict[str, int]:
+        return {r["class_code"]: int(r["n"]) for r in self.class_summary(trip_id)}
 
 
 def detection_to_dict(row: sqlite3.Row) -> dict[str, Any]:

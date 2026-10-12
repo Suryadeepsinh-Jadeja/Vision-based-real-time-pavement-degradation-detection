@@ -199,11 +199,19 @@ def score_sample_unit(defects: list[Defect], area_m2: float) -> SampleUnit:
     )
 
     # 9.1 - total the quantity per distress type and severity.
+    #
+    # Severity is graded here rather than trusted from the caller. This is the
+    # path that produces the per-unit scores the dashboard and the work orders
+    # read, so a placeholder severity left on a stored record would otherwise
+    # reach the deduct table unchecked. ``compute_pci`` grades first and this
+    # is then idempotent, so calling both is safe.
     totals: dict[tuple[str, str], float] = defaultdict(float)
     for defect in defects:
         dtype = distress_for(defect.class_code)
+        grading = classify_severity(defect.class_code, defect.geometry())
+        defect.severity = grading.severity
         quantity = _quantity_for(dtype.unit, defect)
-        totals[(defect.class_code, defect.severity.upper())] += quantity
+        totals[(defect.class_code, grading.severity.upper())] += quantity
 
     # 9.3 - a deduct value per type/severity pair.
     deducts: list[float] = []
@@ -248,6 +256,11 @@ def split_into_sample_units(
     start_chainage = 0.0
     chainage = 0.0
     cumulative = 0.0
+    # Defects already placed. A defect must belong to exactly one sample unit:
+    # it is counted where the vehicle met it, not in every unit it passes
+    # nearby. Without this, a 20 m proximity radius spanning several fixes
+    # counted the same pothole once per fix, inflating TDV several-fold.
+    placed: set[str] = set()
 
     for i, point in enumerate(track):
         if i:
@@ -258,9 +271,16 @@ def split_into_sample_units(
                 point["longitude"],
             )
         position = (point["latitude"], point["longitude"])
-        for defect in defects:
+        for index, defect in enumerate(defects):
+            # Identity: prefer the real detection id, then fall back to object
+            # identity so that several genuinely distinct defects at the same
+            # coordinates (a cluster of potholes) are not collapsed into one.
+            key = defect.detection_id or f"idx:{index}"
+            if key in placed:
+                continue
             if haversine_m(defect.lat, defect.lon, *position) <= 20.0:
                 bucket.append(defect)
+                placed.add(key)
 
         chainage = cumulative
         if (chainage - start_chainage) * lane_width_m >= area_m2:
@@ -322,17 +342,25 @@ def compute_pci(
 
     for defect in defects:
         breakdown[defect.class_code] = breakdown.get(defect.class_code, 0) + 1
+
+        # Grade from the measurement, not from whatever was stored. The
+        # detector cannot measure pothole depth or crack width, so stored
+        # severity arrives as the "M" placeholder that ``from_record`` fills in
+        # -- scoring against that placeholder silently understated every
+        # deduct value. ``classify_severity`` was already being called here to
+        # collect limitations, but its verdict was discarded.
+        grading = classify_severity(defect.class_code, defect.geometry())
+        if not grading.complete:
+            limitations.add(grading.basis)
+        defect.severity = grading.severity
+
         sev = defect.severity.upper()
         sev_breakdown[sev] = sev_breakdown.get(sev, 0) + 1
 
-        # Re-grade where the measurement supports it, and record the gaps.
-        result = classify_severity(defect.class_code, defect.geometry())
-        if not result.complete:
-            limitations.add(result.basis)
         deducts.append(
             deduct_value(
                 defect.class_code,
-                defect.severity.upper(),
+                sev,
                 density_pct(
                     _quantity_for(distress_for(defect.class_code).unit, defect),
                     distress_for(defect.class_code).unit,

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from pathlib import Path
 
 import pytest
 
@@ -372,3 +373,75 @@ def test_record_and_dict_agree():
 
 def test_from_record_preserves_detection_id():
     assert Defect.from_record(_record(detection_id="xyz")).detection_id == "xyz"
+
+
+# --- defects found while building the dashboard ---------------------------
+# Three real defects, each of which survived a green suite.
+
+
+def test_a_defect_counts_once_not_once_per_gps_fix():
+    """A defect belongs to exactly one sample unit.
+
+    Regression guard. The 20 m proximity radius spans several fixes at 1 Hz, so
+    the same pothole was appended once for every fix it sat near. One pothole
+    became four, and TDV rose accordingly.
+    """
+    track = [{"latitude": 23.0 + i * 0.00005, "longitude": 72.5} for i in range(80)]
+    # One defect, given a real id, near the middle of the track.
+    one = [Defect("D40", "H", 23.0 + 40 * 0.00005, 72.5, area_m2=0.09, detection_id="only-one")]
+    result = compute_pci(one, track, sample_area_m2=250.0)
+
+    counted = sum(u["defect_count"] for u in result["sample_units"])
+    assert counted == 1, f"one defect was counted {counted} times across sample units"
+
+
+def test_severity_is_graded_not_taken_from_a_placeholder():
+    """Stored severity is overridden by what the measurement supports.
+
+    Regression guard. ``Defect.from_record`` fills a missing severity with "M",
+    and the deduct table was read from that placeholder. ``classify_severity``
+    was already being called to collect limitations, but its verdict was
+    discarded -- so every detector-recorded defect scored as Medium.
+    """
+    unmeasured = compute_pci([Defect("D40", "M", 23.0, 72.5, area_m2=0.09)])
+    assert unmeasured["severity_breakdown"]["H"] == 1, (
+        "a defect stored with the placeholder severity M must be re-graded; "
+        f"got {unmeasured['severity_breakdown']}"
+    )
+    assert unmeasured["severity_breakdown"]["M"] == 0
+
+    result = classify_severity("D40", Geometry(area_m2=0.09, equiv_diameter_m=0.34))
+    assert not result.complete, "unmeasurable pothole depth must be reported as incomplete"
+    assert result.severity == "H"
+
+
+def test_units_are_numbered_per_trip_not_globally():
+    """unit_id alone must not be treated as a global identity.
+
+    Regression guard. Unit ids are generated as ``unit-001`` for every trip,
+    so a global primary key let the second trip overwrite the first.
+    """
+    import tempfile
+
+    from roadscope.storage.repository import Repository
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Repository(Path(tmp) / "t.sqlite")
+        repo.upsert_device("van-01")
+        unit = {
+            "unit_id": "unit-001",
+            "chainage_start_m": 0.0,
+            "chainage_end_m": 75.0,
+            "area_m2": 250.0,
+            "tdv": 10.0,
+            "cdv": 10.0,
+            "pci": 90.0,
+            "rating": "Good",
+        }
+        for trip in ("trip-a", "trip-b"):
+            repo.start_trip(trip, "van-01")
+            repo.replace_sample_units(trip, [unit])
+
+        assert len(repo.sample_units("trip-a")) == 1
+        assert len(repo.sample_units("trip-b")) == 1
+        assert repo.sample_units("trip-a")[0]["pci"] == 90.0

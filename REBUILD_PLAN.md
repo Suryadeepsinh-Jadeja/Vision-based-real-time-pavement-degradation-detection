@@ -1545,8 +1545,29 @@ filtered at 0.87 m.
 against a known-noise model; it does not establish what your phone's GPS
 actually does. The before/after comparison needs real tracks.
 
+#### Streamlit dashboard — delivered
+
+`src/roadscope/ui/{dashboard.py,maps.py}`, launched with
+`streamlit run scripts/dashboard.py`. Five tabs: condition map, per-unit PCI
+breakdown, defect table, work orders, device telemetry. Read-only; it never
+writes to the store and never runs detection.
+
+Closing the last gap in Phase 2's gate. Building it exposed four defects that a
+fully green test suite had not caught, because nothing had yet connected the
+database, the fusion layer, the ASTM engine and a view:
+
+| Defect | Effect |
+|---|---|
+| `unit_id` was a global primary key but generated per trip | Scoring a second trip **deleted the first trip's results** — trip 1 kept only 2 leftover units out of 40 |
+| A defect within 20 m was counted once per GPS fix | One pothole counted ~4 times; TDV inflated several-fold |
+| Stored severity placeholder `"M"` was scored instead of the graded value | `classify_severity` was called to collect limitations, but its verdict was discarded. Every detector-recorded defect scored Medium regardless of geometry |
+| `streamlit run <path>` executes without package context | `ImportError: attempted relative import with no known parent package`; the HTTP 200 was Streamlit's shell, not the app |
+
+Four regression tests added; three verified to fail against the pre-fix code.
+The severity re-grade was verified twice — removing either the corridor-level
+or the per-unit grading is caught.
+
 #### Still open for Phase 4
 
-- [ ] Streamlit dashboard: DB-backed, condition polyline, work orders with road
-      names. `src/roadscope/ui/` exists but is an empty placeholder.
 - [ ] Field GPS measurement from real tracks.
+- [ ] Condition map on real survey data (the demo database is seeded, not driven).
