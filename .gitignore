@@ -17,8 +17,10 @@ dist/
 *.sqlite3
 *.db
 
-# Model weights are fetched from GitHub Release by scripts/download_weights.sh
-# models/*.pt
+# Model weights are never committed. models/rdd2022-yolov8m-r1.pt is 52 MB and
+# is reproduced by scripts/train_kaggle.md; committing it once already took this
+# repository to 402 MB. Fetch it with scripts/download_weights.sh.
+models/*.pt
 
 # macOS metadata
 .DS_Store

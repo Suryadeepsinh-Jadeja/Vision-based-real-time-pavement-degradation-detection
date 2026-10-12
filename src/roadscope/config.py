@@ -41,7 +41,11 @@ class Settings(BaseSettings):
 
     # --- Detection ------------------------------------------------------
     model_path: Path | None = None
-    model_name: str = "roadscope-yolov8m.pt"
+    #: Preferred weights filename, resolved against :data:`MODEL_CANDIDATES`.
+    #: Matches ``paths.MODEL_CANDIDATES``; see that tuple for why the order
+    #: matters. The RDD2022 detector (``rdd2022-yolov8m-r1.pt``, 0.609 mAP50 on
+    #: RDD2022 val per docs/results.md) is the intended default.
+    model_name: str = "rdd2022-yolov8m-r1.pt"
     conf_threshold: float = 0.35
     iou_threshold: float = 0.50
     # Measured on this 8 GB CPU-only laptop with the legacy weights:

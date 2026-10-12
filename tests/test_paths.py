@@ -94,6 +94,30 @@ def test_resolve_model_finds_first_candidate(tmp_path, monkeypatch):
     assert paths.resolve_model(("first.pt", "second.pt")).name == "first.pt"
 
 
+def test_trained_rdd2022_weights_outrank_the_legacy_placeholder(tmp_path, monkeypatch):
+    """The 4-class RDD2022 detector must win over the single-class placeholder.
+
+    Regression guard. `pothole_yolov8.pt` is a COCO checkpoint whose only class
+    is `0`; it used to be the only file in models/, so it silently won
+    resolution and the agent reported "1 classes" while the trained weights sat
+    next to it unused. Anything that detects potholes must come first.
+    """
+    monkeypatch.setenv("ROADSCOPE_ROOT", str(tmp_path))
+    paths.reset_cache()
+    models = paths.ensure_dir(tmp_path / "models")
+    (models / "pothole_yolov8.pt").write_bytes(b"x")
+    (models / "rdd2022-yolov8m-r1.pt").write_bytes(b"x")
+    assert paths.resolve_model().name == "rdd2022-yolov8m-r1.pt"
+
+
+def test_default_model_name_is_the_trained_detector():
+    """Config must not default back to a name that no longer exists."""
+    from roadscope.config import Settings
+
+    assert Settings().model_name == "rdd2022-yolov8m-r1.pt"
+    assert Settings().model_name in paths.MODEL_CANDIDATES
+
+
 def test_no_unresolvable_relative_paths_in_source():
     """No module may build a path from a bare relative string."""
     import roadscope

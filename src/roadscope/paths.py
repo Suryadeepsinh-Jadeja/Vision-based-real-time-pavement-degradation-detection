@@ -33,12 +33,20 @@ PACKAGE_DIR: Path = Path(__file__).resolve().parent
 _ROOT_MARKERS = ("pyproject.toml", ".git")
 
 #: Candidate weight filenames, in search order.
+#:
+#: The trained RDD2022 detector is listed first because it is the only weights
+#: file that knows the four IRC-82-2015 damage classes (D00/D10/D20/D40). The
+#: legacy single-class names that follow are COCO placeholders kept only so an
+#: older checkout still starts; they detect ``person`` and nothing useful.
+#:
+#: This order matters. ``resolve_model`` returns the *first* candidate that
+#: exists, so inserting a file here silently changes which model the agent
+#: loads. See docs/results.md for the per-class metrics each weight set scores.
 MODEL_CANDIDATES: tuple[str, ...] = (
+    "rdd2022-yolov8m-r1.pt",
     "best.pt",
     "roadscope-yolov8m.pt",
-    "roadscope-yolov8m-seg.pt",
     "pothole_yolov8.pt",
-    "yolov8m-seg.pt",
 )
 
 
