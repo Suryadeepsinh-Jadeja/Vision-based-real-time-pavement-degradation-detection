@@ -1396,7 +1396,7 @@ Every phase also carries a **contingency**: what to do if the gate fails. A plan
 | `test_detector_singleton` passes | ✅ |
 | `test_paths_independent_of_cwd` passes | ✅ |
 | ruff clean, 33 tests pass | ✅ |
-| Training run 1 in flight | ❌ **blocked — needs GPU account (§19 Q4)** |
+| Training run 1 in flight | ✅ run `r1` completed, 0.609 mAP50 |
 
 Delivered: `pyproject.toml` with optional extras, `src/roadscope/` package
 (`paths`, `config`, `logging_setup`, `vision.detector`, `geo.quality`,
@@ -1451,3 +1451,69 @@ degradation is visible instead of silent.
       `VideoFileSource`; only the physical link is untested.
 - [ ] Streamlit dashboard reading the database. Phase 4 deliverable; the
       database side is proven, the UI is not written yet.
+
+### Phase 3 — Detection Accuracy ⚠️ 1 of 2 gates met
+
+Full per-class figures and the diagnosis are in `docs/results.md`.
+
+| Gate | Target | Result | Status |
+| --- | --- | --- | --- |
+| Overall mAP50 | ≥ 0.60 | **0.609** | ✅ |
+| D40 pothole AP50 | ≥ 0.55 | **0.538** | ❌ |
+
+Run `r1` (YOLOv8m, 40 epochs, India+Japan+US, 15,928 images / 34,314 boxes)
+produced D00 0.651 · D10 0.558 · D20 0.688 · D40 0.538. Selected.
+
+#### Experiment: pothole oversampling — rejected, with a reason
+
+Run `r2` duplicated the 2,407 pothole-containing train images 3× (val untouched at
+3,185, so the comparison is clean), lifting D40 from 16.2% to 32.3% of train
+boxes. Fine-tuned from `r1/weights/best.pt`, 22 of 25 epochs.
+
+The intervention worked as designed and still lost AP:
+
+| D40 | r1 | r2 | Δ |
+| --- | --- | --- | --- |
+| Recall | 0.495 | 0.525 | **+0.030** |
+| Precision | 0.595 | 0.580 | −0.015 |
+| **AP50** | **0.538** | **0.526** | **−0.012** |
+
+**Finding: pothole AP50 is localisation-limited, not class-imbalance-limited.**
+The AP50-95 / AP50 ratio is the worst of any class:
+
+| Class | AP50-95 / AP50 |
+| --- | --- |
+| D00 | 0.56 |
+| D20 | 0.52 |
+| D10 | 0.45 |
+| **D40** | **0.43** |
+
+Potholes are small and roughly circular, so a proportionally accurate box that is
+displaced loses most of its IoU and fails the 0.5 threshold outright. Cracks are
+elongated, so the same proportional error costs less IoU.
+
+**Consequence:** more pothole examples cannot close this gate. The remaining levers
+are inference resolution (960 → 1280), box-regression-focused fine-tuning, or
+SAM 2 box-prompted mask refinement — none attempted, since quota went to the
+oversampling hypothesis that the data then refuted.
+
+#### Still open for Phase 3
+
+- [ ] `r1/weights/best.pt` downloaded into `models/` and `agent --check` reporting
+      4 classes instead of 1.
+- [ ] **In-domain evaluation on ~150 hand-labelled dashcam frames.** Every figure so
+      far is RDD2022 val and says nothing about Indian roads. This is the number that
+      actually matters for the review.
+
+### Phase 4 — Civil Engine ✅
+
+ASTM D6433 PCI implemented and validated against the published worked example:
+DVs 4 / 17 / 13 and TDV 34 exact, TM 5-623 CDV 33 exact. 109 tests pass.
+
+Delivered: `civil/{distress,severity,dv_tables,cdv,pci}.py`. Zero detector
+dependency, which is why it completed without waiting on the model.
+
+#### Still open for Phase 4
+
+- [ ] Streamlit dashboard: DB-backed, condition polyline, work orders with road names.
+- [ ] GPS before/after field measurement (drift < 5% over 2 km).
