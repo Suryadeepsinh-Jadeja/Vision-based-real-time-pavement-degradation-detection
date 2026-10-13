@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 import streamlit as st
 
+from .. import paths
 from ..config import get_settings
 from ..ui.playground import (
     CLASS_LABELS,
@@ -68,7 +69,6 @@ def main() -> None:
         )
         return
 
-    settings = get_settings()
     with st.sidebar:
         st.markdown("**Model**")
         st.write(f"`{detector.model_path.name}`")
@@ -100,7 +100,11 @@ def main() -> None:
         _render_legend()
         return
 
-    path = load_upload(upload.name, upload.getvalue(), settings.data_dir() / "uploads")
+    # Uploads land beside the project's other runtime data. ``data_dir`` is a
+    # function on ``roadscope.paths``, not a Settings field -- Settings only
+    # carries the individual paths (outbox_db, server_db, thumb_dir).
+    upload_dir = paths.data_dir() / "uploads"
+    path = load_upload(upload.name, upload.getvalue(), upload_dir)
 
     if is_video(path):
         _run_video(detector, path, conf, imgsz)

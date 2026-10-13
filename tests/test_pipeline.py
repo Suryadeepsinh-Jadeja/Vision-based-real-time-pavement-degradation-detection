@@ -415,3 +415,59 @@ def test_video_sampling_reduces_frames(tmp_path):
     sampled = list(iter_video_frames(path, sample_fps=5.0))
     assert len(every) > len(sampled), "sampling must reduce the frame count"
     assert len(sampled) >= 1
+
+
+def test_upload_path_resolution_matches_the_ui():
+    """The playground must build upload paths the way the UI actually does.
+
+    Regression guard. ``main()`` called ``settings.data_dir()``, but
+    ``data_dir`` is a function on ``roadscope.paths`` -- Settings only carries
+    individual paths. Every upload therefore died with
+    ``AttributeError: 'Settings' object has no attribute 'data_dir'``.
+
+    It survived review because the earlier test called ``load_upload`` with a
+    hand-made tmpdir instead of going through the same expression the UI uses.
+    This asserts the real expression, and asserts no UI module calls a method
+    that does not exist on Settings.
+    """
+    from roadscope import paths
+    from roadscope.config import Settings
+    from roadscope.ui.playground import load_upload
+
+    settings = Settings()
+    upload_dir = paths.data_dir() / "uploads"
+
+    # The exact call the UI makes.
+    resolved = load_upload("0x0.png", b"data", upload_dir)
+    assert resolved.parent == upload_dir
+    assert resolved.suffix == ".png"
+
+    # And the mistake that caused the crash is now impossible to reintroduce
+    # unnoticed: data_dir is not a Settings attribute.
+    assert not hasattr(settings, "data_dir")
+    assert hasattr(paths, "data_dir")
+
+
+def test_ui_modules_only_use_real_settings_attributes():
+    """Every ``settings.X`` used by the UI must exist on Settings.
+
+    A missing field is a crash on first upload, and the failure only appears
+    once a user interacts with the page.
+    """
+    import pathlib
+    import re
+
+    from roadscope.config import Settings
+
+    ui_dir = pathlib.Path(__file__).resolve().parents[1] / "src" / "roadscope" / "ui"
+    pattern = re.compile(r"\bsettings\.([a-z_]+)")
+    settings = Settings()
+    offenders: list[str] = []
+
+    for py in ui_dir.rglob("*.py"):
+        for lineno, line in enumerate(py.read_text().splitlines(), 1):
+            for name in pattern.findall(line):
+                if not hasattr(settings, name):
+                    offenders.append(f"{py.name}:{lineno} settings.{name}")
+
+    assert not offenders, "undefined Settings attributes: " + ", ".join(offenders)
