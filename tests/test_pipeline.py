@@ -288,3 +288,130 @@ def test_topics_are_namespaced(settings):
     assert topic_for("roadscope", "van-01", TOPIC_GPS) == "roadscope/van-01/gps"
     with pytest.raises(ValueError):
         topic_for("roadscope", "bad/id", TOPIC_GPS)
+
+
+# --- detector playground ---------------------------------------------------
+# Upload-and-detect support. The counting logic is tested here so the UI does
+# not have to be launched to know whether a number would be right.
+
+
+def test_one_defect_across_many_frames_counts_once(tmp_path):
+    """A pothole held in view must be one defect, not one per frame."""
+    from roadscope.fusion.tracker import ByteTracker
+    from roadscope.vision.detector import Detection
+
+    tracker = ByteTracker()
+    emitted = 0
+    for i in range(30):
+        # Same box, drifting slightly as a vehicle approaches.
+        box = (100 + i * 2, 100, 200 + i * 2, 180)
+        dets = [Detection(class_code="D40", confidence=0.8, bbox=box, class_id=3)]
+        emitted += len(tracker.update(dets, ts=i * 0.2, frame_index=i))
+    assert emitted == 1, f"repeat sightings should collapse to one defect, got {emitted}"
+
+
+def test_distinct_defects_are_not_collapsed(tmp_path):
+    from roadscope.fusion.tracker import ByteTracker
+    from roadscope.vision.detector import Detection
+
+    tracker = ByteTracker()
+    emitted = 0
+    for i in range(30):
+        dets = [
+            Detection(
+                class_code="D40", confidence=0.8, bbox=(100 + i, 100, 200 + i, 180), class_id=3
+            ),
+            Detection(class_code="D00", confidence=0.7, bbox=(600, 300, 700, 360), class_id=0),
+        ]
+        emitted += len(tracker.update(dets, ts=i * 0.2, frame_index=i))
+    assert emitted == 2
+
+
+def test_upload_name_cannot_escape_the_upload_directory(tmp_path):
+    """An upload filename is attacker-controlled and must not build a path."""
+    from roadscope.ui.playground import load_upload
+
+    target = load_upload("../../etc/passwd", b"payload", tmp_path / "uploads")
+    assert target.parent == tmp_path / "uploads"
+    assert ".." not in str(target)
+
+
+def test_upload_name_keeps_its_extension(tmp_path):
+    from roadscope.ui.playground import load_upload
+
+    target = load_upload("clip.mp4", b"data", tmp_path / "uploads")
+    assert target.suffix == ".mp4"
+
+
+def test_detection_normalisation_is_clamped_to_the_frame(tmp_path):
+    """A box spilling past the edge must not produce a normalised coord > 1."""
+
+    from roadscope.ui.playground import to_detection_dict
+    from roadscope.vision.detector import Detection
+
+    det = Detection(class_code="D40", confidence=0.9, bbox=(-20, -10, 900, 500), class_id=3)
+    d = to_detection_dict(det, frame_w=800, frame_h=480)
+    x1, y1, x2, y2 = d["box_norm"]
+    assert 0.0 <= x1 <= x2 <= 1.0
+    assert 0.0 <= y1 <= y2 <= 1.0
+
+
+def test_annotate_draws_without_changing_the_original():
+    import numpy as np
+
+    from roadscope.ui.playground import annotate
+
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    dets = [
+        {
+            "bbox": (10, 10, 60, 50),
+            "class_code": "D40",
+            "confidence": 0.9,
+            "box_norm": (0, 0, 1, 1),
+            "width_px": 50,
+            "height_px": 40,
+            "area_frac": 0.1,
+        }
+    ]
+    out = annotate(frame, dets)
+    assert out.shape == frame.shape
+    assert out.any(), "nothing was drawn"
+    assert not frame.any(), "the input frame must not be mutated"
+
+
+def test_small_targets_are_flagged():
+    """A miss on a distant shot should be called plausible, not certain."""
+    from roadscope.ui.playground import is_probable_small_target
+
+    tiny = [{"area_frac": 0.002, "width_px": 12, "height_px": 8}]
+    big = [{"area_frac": 0.20, "width_px": 300, "height_px": 300}]
+    assert is_probable_small_target(tiny) is True
+    assert is_probable_small_target(big) is False
+    assert is_probable_small_target([]) is False
+
+
+def test_confidence_threshold_is_clamped():
+    from roadscope.ui.playground import safe_conf
+
+    assert 0.01 <= safe_conf(0.0) <= 0.99
+    assert safe_conf(5.0) <= 0.99
+    assert safe_conf(-1.0) >= 0.01
+
+
+def test_video_sampling_reduces_frames(tmp_path):
+    """Sampling must actually skip frames, and report it rather than hide it."""
+    import cv2
+    import numpy as np
+
+    from roadscope.ui.playground import iter_video_frames
+
+    path = tmp_path / "clip.mp4"
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30, (320, 240))
+    for _ in range(60):
+        vw.write(np.zeros((240, 320, 3), dtype=np.uint8))
+    vw.release()
+
+    every = list(iter_video_frames(path, sample_fps=None))
+    sampled = list(iter_video_frames(path, sample_fps=5.0))
+    assert len(every) > len(sampled), "sampling must reduce the frame count"
+    assert len(sampled) >= 1

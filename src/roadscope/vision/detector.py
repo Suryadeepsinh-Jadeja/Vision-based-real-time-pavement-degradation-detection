@@ -83,12 +83,21 @@ class DefectDetector:
         log.debug("Detector instantiated (load_count=%d)", type(self).load_count)
 
     @classmethod
-    def instance(cls, model_path: Path | None = None, device: str | None = None) -> DefectDetector:
-        """Return the process-wide detector, constructing it on first call."""
+    def instance(
+        cls, model_path: Path | str | None = None, device: str | None = None
+    ) -> DefectDetector:
+        """Return the process-wide detector, constructing it on first call.
+
+        ``model_path`` accepts a string as well as a :class:`~pathlib.Path`.
+        A str previously reached ``_load`` unchanged and raised
+        ``AttributeError: 'str' object has no attribute 'name'`` at the first
+        ``self.model_path.name``. Every in-repo caller passed a Path, so the
+        mismatch only surfaced for a caller passing a plain string.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = cls(model_path, device)
+                    cls._instance = cls(Path(model_path) if model_path else None, device)
                     cls._instance._load()
         return cls._instance
 

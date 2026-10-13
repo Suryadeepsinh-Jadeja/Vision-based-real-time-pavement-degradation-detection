@@ -1567,7 +1567,35 @@ Four regression tests added; three verified to fail against the pre-fix code.
 The severity re-grade was verified twice — removing either the corridor-level
 or the per-unit grading is caught.
 
+#### Detector playground — delivered
+
+`src/roadscope/ui/{playground.py,detector_playground.py}`, launched with
+`streamlit run scripts/detector_playground.py`. Upload an image or a clip and
+see every detection with annotated frames, per-class counts, and JSON export.
+
+Separate app rather than another dashboard tab: the dashboard requires a trip in
+the store before it renders anything, which is the wrong entry point for "does
+this model see the pothole in this photo."
+
+Two design decisions worth stating:
+
+- **Video goes through the same `ByteTracker` the live agent uses**, so a
+  pothole held in view for thirty frames reports one defect rather than thirty.
+  A playground counting raw frames would report numbers the deployed system
+  never produces. Verified: one box over 30 frames → 1 defect; two distinct
+  boxes → 2.
+- **Video sampling is disclosed.** Frames are sampled at 5 fps by default, and
+  when sampling is active the UI says so rather than presenting a skim as
+  exhaustive coverage.
+
+Upload filenames are sanitised before building a path — an upload name is
+attacker-controlled, so `../../etc/passwd` must not escape the upload directory.
+
 #### Still open for Phase 4
 
 - [ ] Field GPS measurement from real tracks.
 - [ ] Condition map on real survey data (the demo database is seeded, not driven).
+- [ ] **Detector playground unverified on real imagery.** Every function it calls
+      was exercised, and it renders without error, but no genuine pothole photo
+      was available in this environment. Detection counts shown by the tool are
+      model output, not validated accuracy.
