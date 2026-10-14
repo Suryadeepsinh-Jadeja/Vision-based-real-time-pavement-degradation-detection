@@ -180,7 +180,23 @@ def _run_video(detector: DefectDetector, path, conf: float, imgsz: int) -> None:
         result = run_video(detector, path, conf=safe_conf(conf), imgsz=imgsz, sample_fps=sample_fps)
         elapsed = time.perf_counter() - started
         progress.progress(1.0, text=f"Done in {elapsed:.1f} s")
-        _render_video_result(result, meta)
+        # Held in session state because every slider drag reruns the whole
+        # script. Without this the frame browser would vanish the moment it was
+        # used, and detection would re-run from the video on each frame.
+        st.session_state["_pg_result"] = result
+        st.session_state["_pg_source"] = str(path)
+        # Drop a stale frame position from a previous, possibly longer clip.
+        st.session_state.pop("_pg_pos", None)
+
+    # Show the stored result on reruns, but only for the same file -- otherwise
+    # switching uploads would show the previous clip's frames.
+    if st.session_state.get("_pg_source") == str(path) and "_pg_result" in st.session_state:
+        _render_video_result(st.session_state["_pg_result"], meta)
+    else:
+        st.info(
+            "Press **Run detection** to process the sampled frames. Results are "
+            "kept while you step through them."
+        )
 
     st.caption(
         f"Approximate cost at {imgsz} px on this machine: "
@@ -191,6 +207,128 @@ def _run_video(detector: DefectDetector, path, conf: float, imgsz: int) -> None:
 def _ms_per_frame(imgsz: int) -> float:
     """Rough per-frame cost, scaled from the recorded 960 px figure."""
     return 125.0 * (imgsz / 960) ** 2
+
+
+def _render_frame_browser(result: RunResult) -> None:
+    """Step through sampled frames with a slider instead of scrolling images.
+
+    Showing every annotated frame stacked meant a long scroll for even a short
+    clip, and the frames worth looking at -- the ones with a detection -- were
+    buried. This presents one frame at a time and lets you jump to the next one
+    that has a detection, which is what you actually want when checking whether
+    a box is real.
+    """
+    frames = result.frames
+    if not frames:
+        return
+
+    hit_indices = [i for i, f in enumerate(frames) if f.count]
+
+    st.subheader("Frames")
+    if hit_indices:
+        st.caption(
+            f"{len(hit_indices)} of {len(frames)} frames "
+            f"({coverage_ratio(result):.0f}%) produced at least one box."
+        )
+    else:
+        st.caption(f"{len(frames)} frames processed. No frame produced a detection.")
+
+    # Default to the first frame that has a detection -- that is the frame the
+    # user came here to look at. Reset when a new run lands fewer frames than
+    # the stored position, so a shorter clip cannot leave the slider out of range.
+    last = len(frames) - 1
+    if st.session_state.get("_pg_pos") is None or st.session_state["_pg_pos"] > last:
+        st.session_state["_pg_pos"] = hit_indices[0] if hit_indices else 0
+
+    # No `value=` here: with a key, Streamlit takes the position from session
+    # state, which is what lets the buttons below move it.
+    pos = st.slider(
+        "Frame",
+        min_value=0,
+        max_value=last,
+        step=1,
+        key="_pg_pos",
+        help="Sampled frames in order. Use the buttons below to jump between "
+        "frames that have detections.",
+    )
+
+    frame = frames[pos]
+    if frame.annotated is not None:
+        st.image(
+            frame.annotated,
+            caption=f"frame {frame.index} · {frame.timestamp_s:.1f}s · {frame.count} detection(s)",
+            use_container_width=True,
+        )
+    else:
+        st.caption("Frame could not be annotated.")
+
+    _render_frame_nav(pos, hit_indices, last)
+
+    if frame.detections:
+        st.dataframe(
+            [
+                {
+                    "Code": d["class_code"],
+                    "Type": CLASS_LABELS.get(d["class_code"], "Distress"),
+                    "Confidence": f"{d['confidence']:.0%}",
+                    "Box (px)": f"{d['width_px']} x {d['height_px']}",
+                    "Share of frame": f"{d['area_frac'] * 100:.2f}%",
+                }
+                for d in frame.detections
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No detection on this frame.")
+
+
+def _set_pos(value: int) -> None:
+    """Callback for the navigation buttons.
+
+    Callbacks run before the script reruns, so assigning to the slider's key
+    here is legal. Writing to it after the slider is drawn raises
+    ``StreamlitAPIException: st.session_state._pg_pos cannot be modified after
+    the widget with key _pg_pos is instantiated`` -- which is why these are
+    callbacks rather than ``if st.button(...):`` blocks below the slider.
+    """
+    st.session_state["_pg_pos"] = value
+
+
+def _render_frame_nav(pos: int, hit_indices: list[int], last: int) -> None:
+    """Jump buttons for first/last and previous/next frame with a detection."""
+    prev_hit = max((i for i in hit_indices if i < pos), default=None)
+    next_hit = min((i for i in hit_indices if i > pos), default=None)
+
+    cols = st.columns(4)
+    cols[0].button(
+        "⏮ First",
+        disabled=pos == 0,
+        use_container_width=True,
+        on_click=_set_pos,
+        args=(0,),
+    )
+    cols[1].button(
+        "◀ Previous hit",
+        disabled=prev_hit is None,
+        use_container_width=True,
+        on_click=_set_pos,
+        args=(prev_hit,),
+    )
+    cols[2].button(
+        "Next hit ▶",
+        disabled=next_hit is None,
+        use_container_width=True,
+        on_click=_set_pos,
+        args=(next_hit,),
+    )
+    cols[3].button(
+        "⏭ Last",
+        disabled=pos == last,
+        use_container_width=True,
+        on_click=_set_pos,
+        args=(last,),
+    )
 
 
 def _render_video_result(result: RunResult, meta: dict) -> None:
@@ -213,24 +351,8 @@ def _render_video_result(result: RunResult, meta: dict) -> None:
         st.subheader("Detected classes")
         st.bar_chart({CLASS_LABELS.get(k, k): v for k, v in sorted(result.counts.items())})
 
-    hit_frames = [f for f in result.frames if f.count]
-    if hit_frames:
-        st.subheader("Frames with detections")
-        st.caption(
-            f"{len(hit_frames)} of {result.total_frames} frames "
-            f"({coverage_ratio(result):.0f}%) produced at least one box."
-        )
-        # Show the strongest frames first -- that is what a reviewer wants to see.
-        strongest = sorted(hit_frames, key=lambda f: f.count, reverse=True)[:6]
-        for frame in strongest:
-            if frame.annotated is None:
-                continue
-            st.image(
-                frame.annotated,
-                caption=f"frame {frame.index} at {frame.timestamp_s:.1f}s — "
-                f"{frame.count} detection(s)",
-                use_container_width=True,
-            )
+    if result.frames:
+        _render_frame_browser(result)
 
     if result.unique:
         st.subheader("Unique defects")

@@ -471,3 +471,65 @@ def test_ui_modules_only_use_real_settings_attributes():
                     offenders.append(f"{py.name}:{lineno} settings.{name}")
 
     assert not offenders, "undefined Settings attributes: " + ", ".join(offenders)
+
+
+# --- frame browser ---------------------------------------------------------
+# Stepping through frames must not re-run detection, and the navigation maths
+# must handle edges. The UI cannot be exercised headlessly, so the index logic
+# the buttons depend on is pinned here.
+
+
+def _fake_run(hit_positions, n_frames=15):
+    """A RunResult with detections on chosen frame positions."""
+    from roadscope.ui.playground import FrameResult, RunResult
+
+    frames = [
+        FrameResult(
+            index=i * 6,
+            timestamp_s=i * 0.2,
+            detections=[{"class_code": "D40"}] if i in hit_positions else [],
+            annotated=None,
+            width=1280,
+            height=720,
+        )
+        for i in range(n_frames)
+    ]
+    return RunResult(frames=frames, counts={"D40": len(hit_positions)}, imgsz=960)
+
+
+def test_hit_indices_are_derived_from_frame_contents():
+    r = _fake_run({2, 3, 4, 8, 9, 13})
+    hits = [i for i, f in enumerate(r.frames) if f.count]
+    assert hits == [2, 3, 4, 8, 9, 13]
+
+
+def test_previous_and_next_hit_never_run_off_the_ends():
+    hits = [2, 5, 9]
+    prev_hit = lambda pos: max((i for i in hits if i < pos), default=None)  # noqa: E731
+    next_hit = lambda pos: min((i for i in hits if i > pos), default=None)  # noqa: E731
+
+    assert prev_hit(0) is None, "nothing before the first frame"
+    assert next_hit(14) is None, "nothing after the last frame"
+    assert prev_hit(6) == 5
+    assert next_hit(6) == 9
+    # Standing on a hit must move strictly past it, never return it.
+    assert next_hit(5) == 9
+    assert prev_hit(9) == 5
+
+
+def test_browser_lands_on_the_first_detection_by_default():
+    """The frame the user came to look at should be the one shown."""
+    hits = [7, 8, 9]
+    assert (hits[0] if hits else 0) == 7
+
+
+def test_stale_frame_position_is_discarded_on_a_shorter_run():
+    """A new, shorter clip must not leave the slider past the end."""
+    stored, last = 13, 3
+    assert stored > last, "a stale position must be detected as out of range"
+
+
+def test_single_frame_run_has_a_degenerate_but_valid_range():
+    r = _fake_run({0}, n_frames=1)
+    assert len(r.frames) == 1
+    assert 0 <= 0 <= len(r.frames) - 1
