@@ -14,9 +14,13 @@ which is what lets the unit tests exercise the real pipeline.
 
 from __future__ import annotations
 
+import socket
 import time
 from collections.abc import Iterator
 from typing import Protocol, runtime_checkable
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import cv2
 import numpy as np
@@ -171,6 +175,129 @@ class MjpegSource:
             self.cap.release()
             self.cap = None
             self.reconnects += 1
+
+
+def local_ipv4_addresses() -> list[str]:
+    """Best-effort list of this machine's non-loopback IPv4 addresses.
+
+    Used only to explain a failed camera probe ("phone is on 10.0.0.5, this
+    machine is on 172.30.212.1"). Never raises: a diagnostic that fails is
+    worse than no diagnostic.
+    """
+    found: set[str] = set()
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # Connecting a UDP socket sends nothing; it only asks the kernel
+            # which local address would be used to reach the internet.
+            sock.connect(("8.8.8.8", 80))
+            found.add(sock.getsockname()[0])
+        finally:
+            sock.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.add(info[4][0])
+    except OSError:
+        pass
+    return sorted(ip for ip in found if _is_reportable(ip))
+
+
+def _is_reportable(ip: str) -> bool:
+    """Drop loopback and documentation addresses from the advice message."""
+    if ip.startswith("127.") or ip.startswith("169.254."):
+        return False
+    # RFC 5737 documentation ranges: never a real interface.
+    return not any(ip.startswith(prefix) for prefix in ("192.0.2.", "198.51.100.", "203.0.113."))
+
+
+def _same_private_prefix(a: str, b: str, octets: int = 2) -> bool:
+    """True when two dotted quads agree on the first ``octets`` octets."""
+    try:
+        pa = [int(part) for part in a.split(".")[:octets]]
+        pb = [int(part) for part in b.split(".")[:octets]]
+    except ValueError:
+        return False
+    return len(pa) == octets and pa == pb
+
+
+def probe_camera(url: str, *, timeout_s: float = 4.0) -> tuple[bool, str]:
+    """Check an MJPEG URL is reachable before committing to a run.
+
+    A demo that starts, captures nothing, and exits reporting zeros is worse
+    than one that refuses to start and says why. This does the cheap checks:
+
+    1. TCP connect to host:port -- catches wrong network, phone asleep, app
+       not running.
+    2. A single HTTP GET, reading at most 1 KiB -- catches a wrong path and
+       HTML error pages that ``cv2.VideoCapture`` would silently fail on.
+
+    Returns ``(ok, message)``. The message is written for a person standing
+    next to a phone, so it names the two addresses when they differ.
+    """
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    full_url = url if "://" in url else f"http://{url}"
+    host = parsed.hostname
+    if not host:
+        return False, f"could not parse a host from {url!r}"
+    scheme = parsed.scheme or "http"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    target = f"{host}:{port}"
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            pass
+    except ConnectionRefusedError:
+        return False, (
+            f"{target} refused the connection. The phone is reachable but nothing "
+            "is listening: open the camera app, and check the port (DroidCam 4747, "
+            "IP Webcam 8080)."
+        )
+    except TimeoutError:
+        hint = _network_hint(host)
+        return False, f"{target} did not answer within {timeout_s:.0f}s.{hint}"
+    except OSError as exc:
+        hint = _network_hint(host)
+        return False, f"cannot reach {target} ({exc.strerror or exc}).{hint}"
+
+    try:
+        with urlopen(full_url, timeout=timeout_s) as resp:
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            resp.read(1024)
+    except HTTPError as exc:
+        return False, (
+            f"{target} answered HTTP {exc.code}. The host is right but the path is "
+            "wrong: DroidCam uses /video, IP Webcam uses /video (or /videofeed)."
+        )
+    except (URLError, TimeoutError, OSError) as exc:
+        return False, f"{target} did not return a stream ({exc})."
+
+    if "html" in content_type:
+        return False, (
+            f"{target} returned a web page, not a stream. That is usually the app's "
+            "status page: append /video to the URL."
+        )
+    return True, f"{target} reachable ({content_type or 'stream'})."
+
+
+def _network_hint(host: str) -> str:
+    """Explain a timeout with the addresses that should have matched."""
+    local = local_ipv4_addresses()
+    if not local:
+        return " Check that the phone and this machine are on the same Wi-Fi."
+    same = [ip for ip in local if _same_private_prefix(ip, host)]
+    if same:
+        return (
+            f" This machine is {', '.join(local)}, which shares a subnet with {host}, "
+            "so the phone is probably asleep, firewalled, or the camera app is not "
+            "running."
+        )
+    return (
+        f" This machine is {', '.join(local)}; the phone is {host}. They are on "
+        "different networks, so nothing will route between them. Join both to the "
+        "same Wi-Fi, or enable the phone's hotspot and join it from this machine."
+    )
 
 
 def build_source(

@@ -54,6 +54,31 @@ Install one of these free apps on your phone:
 
 Put the phone and laptop on the same Wi-Fi. Note the phone's IP.
 
+**Check the link before running the agent.** This one command catches almost
+every failed demo:
+
+```bash
+make check-camera URL=http://<phone-ip>:4747/video
+```
+
+It prints `OK` or names the problem. The agent now refuses to start on an
+unreachable camera instead of running 30 seconds and reporting zeros, so you
+cannot mistake a dead link for a dead detector.
+
+Most common failure: the two addresses are on different networks.
+
+```
+camera check : FAILED - 172.30.212.238:4747 did not answer within 4s.
+This machine is 10.148.181.254; the phone is 172.30.212.238. They are on
+different networks, so nothing will route between them.
+```
+
+An IP starting `172.30.` or `100.64.` is usually the phone's **cellular**
+address, which the laptop can never reach. Fix it by putting both on the same
+network: same Wi-Fi, or enable the phone's hotspot and join it from the
+laptop. Then read the IP the camera app shows *on that network* (Android
+hotspots hand out `192.168.43.x`, iPhone `172.20.10.x`).
+
 ### Run the agent
 
 ```bash
@@ -115,6 +140,7 @@ If the phone app's JSON field names differ from the aliases in
 | Problem | Fallback |
 |---|---|
 | Phone and laptop on different networks | Use a phone hotspot; laptop joins it |
+| Camera unreachable | `make check-camera URL=...` names the cause. `--skip-camera-check` overrides the preflight |
 | No camera app installs | Use a recorded video file: `--camera-url` is not needed; pass a path via `VideoFileSource` (see `scripts/seed_demo_data.py` for the pattern) |
 | No GPS app | `--gps-synthetic` (straight line) or `--gps-csv path/to/track.csv` |
 | Broker dies mid-demo | Messages buffer in `var/outbox.sqlite`; run `--replay` afterwards |
@@ -129,7 +155,7 @@ If the phone app's JSON field names differ from the aliases in
   example (DVs 4/17/13, TDV 34, CDV 33).
 - Inference 125 ms/frame at 960 px on MPS (2.4x faster than CPU), 8.0 fps
   sustained against 30 fps capture.
-- 141 tests, ruff clean.
+- 150 tests, ruff clean.
 
 ## What NOT to claim
 

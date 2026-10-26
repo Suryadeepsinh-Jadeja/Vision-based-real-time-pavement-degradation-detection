@@ -11,12 +11,13 @@ PYTHON ?= python
 VENV ?= venv
 PY := $(VENV)/bin/$(PYTHON)
 
-.PHONY: help install check seed dashboard playground test lint clean gc
+.PHONY: help install check check-camera seed dashboard playground test lint clean gc
 
 help:
 	@echo "RoadScope targets:"
 	@echo "  make install       create the venv and install all extras"
 	@echo "  make check         diagnose weights, config, and imports"
+	@echo "  make check-camera URL=http://ip:port/video   test a phone camera link"
 	@echo "  make seed          populate var/demo.sqlite with a synthetic survey"
 	@echo "  make dashboard     launch the condition dashboard"
 	@echo "  make playground    launch the detector playground"
@@ -32,6 +33,10 @@ install:
 
 check:
 	$(PY) -m roadscope.agent --check
+
+check-camera:
+	@test -n "$(URL)" || (echo "usage: make check-camera URL=http://<phone-ip>:4747/video"; exit 1)
+	$(PY) -m roadscope.agent --check --camera-url "$(URL)"
 
 seed:
 	$(PY) scripts/seed_demo_data.py --force

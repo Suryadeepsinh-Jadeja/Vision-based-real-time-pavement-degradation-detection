@@ -42,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, ERROR")
     parser.add_argument(
+        "--skip-camera-check",
+        action="store_true",
+        help="start even if the camera URL does not answer (some cameras only respond as a stream)",
+    )
+    parser.add_argument(
         "--seconds", type=float, default=10.0, help="how long to run before stopping"
     )
     parser.add_argument(
@@ -59,6 +64,14 @@ def _diagnose(settings) -> int:
     print(f"  device id         : {settings.device_id}")
     print(f"  mqtt broker       : {settings.mqtt_url}")
     print(f"  camera url        : {settings.camera_url or '(none - synthetic source)'}")
+
+    if settings.camera_url:
+        from .ingest import probe_camera
+
+        ok, message = probe_camera(settings.camera_url)
+        print(f"  camera check      : {'OK' if ok else 'FAILED'} - {message}")
+        if not ok:
+            return 1
 
     present = paths.available_models()
     if present:
@@ -128,7 +141,22 @@ def _run(settings, args) -> int:
 
     from ..transport.mqtt_client import MQTTPublisher
     from ..transport.topics import TOPIC_STATUS, topic_for
+    from .ingest import probe_camera
     from .pipeline import EdgePipeline
+
+    # Refuse to start on a camera URL that does not answer. Without this the
+    # agent runs to completion, captures nothing, and reports all zeros, which
+    # looks like a broken pipeline rather than an unreachable phone.
+    if settings.camera_url and not getattr(args, "skip_camera_check", False):
+        ok, message = probe_camera(settings.camera_url)
+        if not ok:
+            log.error("camera unreachable: %s", message)
+            log.error(
+                "refusing to start. Fix the link, or pass --skip-camera-check to "
+                "try anyway (the outbox and detector are unaffected)."
+            )
+            return 2
+        log.info("camera check: %s", message)
 
     publisher = MQTTPublisher(settings.mqtt_url, client_id=f"roadscope-{settings.device_id}")
     publisher.set_last_will(
