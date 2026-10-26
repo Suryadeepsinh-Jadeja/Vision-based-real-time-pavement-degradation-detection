@@ -38,6 +38,17 @@ def _torch():
 
 
 CLASS_CODES = {0: "D00", 1: "D10", 2: "D20", 3: "D40"}
+
+
+def _is_auto(device: object) -> bool:
+    """True when a device setting means "choose for me".
+
+    ``Settings.device`` defaults to the string ``"auto"``. Ultralytics treats
+    every non-empty device string as a device name and raises
+    ``Invalid CUDA 'device=auto' requested``, so the sentinel has to be
+    translated to ``None`` at the boundary.
+    """
+    return device is None or not str(device).strip() or str(device).strip().lower() == "auto"
 RDD_CLASS_NAME_MAP = {
     "D00": "Longitudinal Crack",
     "D10": "Transverse Crack",
@@ -75,7 +86,9 @@ class DefectDetector:
     def __init__(self, model_path: Path | None = None, device: str | None = None) -> None:
         self.model_path = model_path
         #: Resolved on first use by :meth:`resolve_device`; None means "auto".
-        self.device: str | None = device
+        #: The literal string "auto" is a settings value, not a torch device --
+        #: handing it to ultralytics raises "Invalid CUDA 'device=auto'".
+        self.device: str | None = None if _is_auto(device) else device
         self.model: Any = None
         self.names: dict[int, str] = {}
         self.engine_name = "unavailable"
@@ -175,15 +188,14 @@ class DefectDetector:
         Silently downgrading a device the caller asked for would be worse than
         the original bug, so the fallback is logged.
         """
-        if self.device is not None:
-            return self.device
-
         torch = _torch()
         if torch is None:
             return "cpu"
 
-        if requested:
+        if requested and not _is_auto(requested):
             candidate = str(requested).lower()
+        elif self.device is not None:
+            return self.device
         elif torch.backends.mps.is_available():
             candidate = "mps"
         elif torch.cuda.is_available():
@@ -224,7 +236,7 @@ class DefectDetector:
             iou=iou,
             imgsz=imgsz,
             verbose=False,
-            device=self.resolve_device(self.device),
+            device=self.resolve_device(),
         )
         detections: list[Detection] = []
         for result in results:

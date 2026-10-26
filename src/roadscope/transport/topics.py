@@ -90,6 +90,8 @@ class DetectionPayload:
     bbox: list[int] | None = None
     road_name: str | None = None
     model_version: str | None = None
+    #: Annotated evidence frame (JPEG, base64). ~30-60 KB at 480 px wide.
+    image_jpeg_b64: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in asdict(self).items() if v is not None}

@@ -5,13 +5,13 @@
 # assumes `make` is run from the repository root.
 #
 # Python entry points are the same ones documented elsewhere; the Makefile
-# only wraps them so a reviewer can type `make demo` and get a running app.
+# only wraps them so a reviewer can type one word and get a running system.
 
 PYTHON ?= python
 VENV ?= venv
 PY := $(VENV)/bin/$(PYTHON)
 
-.PHONY: help install check check-camera seed dashboard playground test lint clean gc
+.PHONY: help install check check-camera seed serve dashboard playground test lint clean gc
 
 help:
 	@echo "RoadScope targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "  make check         diagnose weights, config, and imports"
 	@echo "  make check-camera URL=http://ip:port/video   test a phone camera link"
 	@echo "  make seed          populate var/demo.sqlite with a synthetic survey"
+	@echo "  make serve         receive MQTT into var/demo.sqlite (run during a live survey)"
 	@echo "  make dashboard     launch the condition dashboard"
 	@echo "  make playground    launch the detector playground"
 	@echo "  make test          run the test suite"
@@ -40,6 +41,9 @@ check-camera:
 
 seed:
 	$(PY) scripts/seed_demo_data.py --force
+
+serve:
+	ROADSCOPE_SERVER_DB=var/demo.sqlite $(PY) -m roadscope.server
 
 dashboard:
 	ROADSCOPE_SERVER_DB=var/demo.sqlite $(PY) -m streamlit run scripts/dashboard.py

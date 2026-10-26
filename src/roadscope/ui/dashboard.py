@@ -63,7 +63,8 @@ def main() -> None:
 
     try:
         repo = get_repo(str(settings.server_db))
-        trips = repo.list_trips(limit=100)
+        # sqlite3.Row has no .get(); convert so optional columns can be read safely.
+        trips = [dict(r) for r in repo.list_trips(limit=100)]
     except Exception as exc:
         st.error(f"Cannot open the survey store at {settings.server_db}: {exc}")
         st.code("python -m roadscope.agent --check   # confirm the database path")
@@ -421,6 +422,3 @@ def render_health(repo: Repository, trip_id: str) -> None:
     st.markdown("**Model in use**")
     for d in devices:
         st.write(f"`{d['device_id']}` — {d['model_version'] or 'unknown'}")
-
-
-main()

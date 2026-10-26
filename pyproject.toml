@@ -33,6 +33,7 @@ dev = ["pytest>=8.3.0", "pytest-cov>=5.0.0", "ruff>=0.7.0"]
 
 [project.scripts]
 roadscope-agent = "roadscope.agent.__main__:main"
+roadscope-server = "roadscope.server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/roadscope"]

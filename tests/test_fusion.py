@@ -335,3 +335,26 @@ def test_track_dataclass_defaults():
     assert t.duration_s == pytest.approx(0.25)
     assert t.emitted is False
     assert t.confirmed is False
+
+
+def test_thumbnail_box_is_scaled_with_the_frame(tmp_path):
+    """A phone frame is wider than the thumbnail; the box must shrink with it.
+
+    Regression: the box was drawn in full-resolution pixels on the resized
+    image, so on a 1920 px feed it fell outside the picture and never showed.
+    """
+    import cv2
+
+    fuser = DefectFuser(min_hits=2, thumb_dir=tmp_path, thumb_width=480)
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    box = (1200, 600, 1600, 900)  # entirely beyond x=480 in full-res pixels
+    for i in range(3):
+        fuser.process_frame(
+            img, [det(*box)], ts=i * 0.125, frame_index=i, position=(*BANGALORE, 3.0)
+        )
+    (path,) = list(tmp_path.glob("*.jpg"))
+    thumb = cv2.imread(str(path))
+    assert thumb.shape[1] == 480
+    # Scaled box is (300,150)-(400,225); its edges must be coloured, not black.
+    assert thumb[190, 299:302].max() > 100, "left edge of the box is missing"
+    assert thumb[190, 398:402].max() > 100, "right edge of the box is missing"

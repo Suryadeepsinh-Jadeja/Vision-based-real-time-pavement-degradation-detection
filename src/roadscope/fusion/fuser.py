@@ -14,9 +14,10 @@ attached is an assertion; a pin with a photograph is evidence.
 
 from __future__ import annotations
 
+import base64
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ class DefectRecord:
     length_m: float | None = None
     width_mm: float | None = None
     area_m2: float | None = None
+    image_jpeg: bytes | None = field(default=None, repr=False)
 
     def to_payload(self, device_id: str, trip_id: str) -> dict[str, Any]:
         return DetectionPayload(
@@ -72,6 +74,9 @@ class DefectRecord:
             track_duration_s=round(self.track_duration_s, 2),
             bbox=list(self.bbox) if self.bbox else None,
             model_version=self.model_version,
+            image_jpeg_b64=base64.b64encode(self.image_jpeg).decode("ascii")
+            if self.image_jpeg
+            else None,
         ).to_dict()
 
 
@@ -86,7 +91,7 @@ class DefectFuser:
         min_hits: int = 3,
         max_age_s: float = 2.0,
         thumb_dir: Path | None = None,
-        thumb_width: int = 480,
+        thumb_width: int = 640,
         save_thumbnails: bool = True,
     ) -> None:
         self.tracker = ByteTracker(
@@ -107,36 +112,57 @@ class DefectFuser:
         self.emitted = 0
 
     # -- thumbnails -------------------------------------------------------
-    def _save_thumbnail(self, frame: np.ndarray, track: Track) -> str | None:
-        """Persist the best frame for this track, with the box drawn on."""
+    def _save_thumbnail(
+        self, frame: np.ndarray, track: Track, frame_id: str | None = None
+    ) -> tuple[str | None, bytes | None]:
+        """Persist the frame for this track, with the box drawn on.
+
+        Returns ``(file name, JPEG bytes)``. The bytes travel to the server in
+        the detection message, so the evidence image reaches the system of
+        record rather than staying on the edge device.
+        """
         if not self.save_thumbnails or self.thumb_dir is None or frame is None:
-            return None
+            return None, None
         try:
             self.thumb_dir.mkdir(parents=True, exist_ok=True)
+            frame = frame.copy()  # never draw on the caller's frame
             height, width = frame.shape[:2]
+            scale = 1.0
             if width > self.thumb_width:
                 scale = self.thumb_width / width
                 frame = cv2.resize(frame, (self.thumb_width, int(height * scale)))
             if track.best_bbox is not None:
-                x1, y1, x2, y2 = track.best_bbox
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (239, 68, 68), 3)
+                # The box is in full-resolution pixels; scale it with the frame,
+                # or on a 1920 px phone feed it lands outside a 480 px thumbnail.
+                x1, y1, x2, y2 = (round(v * scale) for v in track.best_bbox)
+                color = (239, 68, 68)  # BGR
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                text = f"{track.class_code} {int(track.best_confidence * 100)}%"
+                (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                ty = y1 - 6 if y1 - th - 10 > 0 else y1 + th + 8
+                cv2.rectangle(frame, (x1, ty - th - 4), (x1 + tw + 6, ty + base), color, -1)
                 cv2.putText(
                     frame,
-                    f"{track.class_code} {int(track.best_confidence * 100)}%",
-                    (x1, max(18, y1 - 8)),
+                    text,
+                    (x1 + 3, ty),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
+                    0.6,
                     (255, 255, 255),
                     2,
                     cv2.LINE_AA,
                 )
-            name = f"track-{track.track_id:06d}.jpg"
-            path = self.thumb_dir / name
-            cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-            return name
+            # Named by frame id: track ids restart at 1 every run, so naming by
+            # track would overwrite the previous run's evidence.
+            name = f"{frame_id or f'track-{track.track_id:06d}'}.jpg"
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                return None, None
+            data = buf.tobytes()
+            (self.thumb_dir / name).write_bytes(data)
+            return name, data
         except Exception as exc:
             log.warning("thumbnail failed for track %s: %s", track.track_id, exc)
-            return None
+            return None, None
 
     # -- main -------------------------------------------------------------
     def process_frame(
@@ -166,7 +192,10 @@ class DefectFuser:
                 )
                 track.emitted = True
                 continue
-            thumb = self._save_thumbnail(frame, track) if frame is not None else None
+            frame_id = f"frm-{uuid.uuid4().hex[:10]}"
+            thumb, jpeg = (
+                self._save_thumbnail(frame, track, frame_id) if frame is not None else (None, None)
+            )
             record = DefectRecord(
                 detection_id=f"det-{uuid.uuid4().hex[:12]}",
                 class_code=track.class_code,
@@ -177,8 +206,9 @@ class DefectFuser:
                 frames_seen=track.hits,
                 track_duration_s=track.duration_s,
                 bbox=track.best_bbox,
-                frame_id=f"frm-{uuid.uuid4().hex[:10]}" if thumb else None,
+                frame_id=frame_id if thumb else None,
                 thumb_path=thumb,
+                image_jpeg=jpeg,
                 model_version=model_version,
             )
             track.emitted = True

@@ -36,3 +36,5 @@ models/*.pt
 output/
 uploads/
 *.log
+# Runtime data: databases, evidence photos, saved GPS fix
+var/

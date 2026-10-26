@@ -4,8 +4,10 @@ The agent never had a GPS source: ``pipeline.ingest_gps`` existed, but nothing
 called it, so every survey was positionless. This module supplies the sources
 that feed it.
 
-Three are provided, in order of preference for a laptop-and-phone setup:
+Four are provided, in order of preference for a laptop-and-phone setup:
 
+* :class:`PushGpsSource` -- the laptop listens and an Android app (GPSLogger)
+  pushes every fix to it. The recommended live-demo path.
 * :class:`HttpGpsSource` -- polls a phone app that publishes GPS over HTTP
   (e.g. "GPS Logger", "GPS2IP", or a custom endpoint). Zero hardware.
 * :class:`CsvGpsSource` -- replays a recorded track. Used for testing and for
@@ -29,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
 from ..geo.quality import GPSFix
@@ -302,6 +305,167 @@ class HttpGpsSource(GpsSource):
             ts_utc=time.time(),
             t_mono=time.monotonic(),
         )
+
+
+class PushGpsSource(GpsSource):
+    """Receive GPS fixes that a phone app *pushes* to the laptop.
+
+    Most free Android GPS apps cannot serve their position for polling, but
+    they can call a URL on every fix. This source runs a tiny HTTP server and
+    turns each request into a :class:`GPSFix`.
+
+    Built for **GPSLogger for Android** (BasicAirData / mendhak, free on
+    F-Droid and Play). In its "Custom URL" logger set the URL to::
+
+        http://<laptop-ip>:8765/gps?lat=%LAT&lon=%LON&acc=%ACC&spd=%SPD&dir=%DIR&sat=%SAT
+
+    GET or POST both work; POST bodies may be form-encoded or JSON. ``spd`` is
+    metres per second (GPSLogger's unit); ``speed_kmh`` is also accepted.
+
+    ``GET /gps`` with no coordinates returns the last fix as JSON, so you can
+    open ``http://<laptop-ip>:8765/gps`` in a browser to confirm the link.
+
+    The fix is stamped with the laptop's receive time, not the phone's clock:
+    the agent rejects fixes older than ``gps_max_age_s``, and a phone clock
+    that is a few seconds off would otherwise make every fix "stale".
+    """
+
+    def __init__(self, port: int = 8765, host: str = "0.0.0.0") -> None:
+        self.host = host
+        self.port = port
+        self._server: Any = None
+        self._thread: threading.Thread | None = None
+        self.last_fix: GPSFix | None = None
+        self.received = 0
+
+    def start(self, on_fix: Callable[[GPSFix], None]) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        source = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def _params(self) -> dict[str, Any]:
+                parsed = urlparse(self.path)
+                params: dict[str, Any] = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    raw = self.rfile.read(length).decode("utf-8", "replace")
+                    ctype = self.headers.get("Content-Type", "")
+                    if "json" in ctype or raw.lstrip().startswith("{"):
+                        try:
+                            body = json.loads(raw)
+                            if isinstance(body, dict):
+                                params.update(body)
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        params.update({k: v[-1] for k, v in parse_qs(raw).items()})
+                return params
+
+            def _reply(self, code: int, payload: dict[str, Any]) -> None:
+                body = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _handle(self) -> None:
+                if urlparse(self.path).path.rstrip("/") not in ("/gps", ""):
+                    self._reply(404, {"error": "use /gps"})
+                    return
+                params = self._params()
+                fix = parse_push_fix(params)
+                if fix is None:
+                    last = source.last_fix
+                    self._reply(
+                        200,
+                        {
+                            "received": source.received,
+                            "last_fix": None
+                            if last is None
+                            else {
+                                "lat": last.latitude,
+                                "lon": last.longitude,
+                                "accuracy_m": last.accuracy_m,
+                                "age_s": round(time.time() - last.ts_utc, 1),
+                            },
+                        },
+                    )
+                    return
+                source.last_fix = fix
+                source.received += 1
+                on_fix(fix)
+                self._reply(200, {"ok": True})
+
+            do_GET = _handle
+            do_POST = _handle
+
+            def log_message(self, *args: Any) -> None:  # silence per-request logs
+                return
+
+        self._server = ThreadingHTTPServer((self.host, self.port), _Handler)
+        self._server.daemon_threads = True
+        self._thread = threading.Thread(
+            target=self._server.serve_forever, daemon=True, name="push-gps"
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+
+def parse_push_fix(params: dict[str, Any]) -> GPSFix | None:
+    """Turn GPSLogger-style parameters into a fix. ``None`` if no position.
+
+    GPSLogger leaves a placeholder empty (or literally ``%SAT``) when the value
+    is unknown; those become ``None`` so the quality gate does not reject a fix
+    for a field the phone never reported.
+    """
+    norm = {str(k).lower(): v for k, v in params.items()}
+
+    def pick(*names: str) -> float | None:
+        for n in names:
+            v = norm.get(n)
+            if v is None or v == "" or (isinstance(v, str) and v.startswith("%")):
+                continue
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    lat = pick("lat", "latitude")
+    lon = pick("lon", "lng", "longitude")
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    if lat == 0.0 and lon == 0.0:  # "no fix yet" from some apps
+        return None
+
+    speed_kmh = pick("speed_kmh", "kmh")
+    if speed_kmh is None:
+        mps = pick("spd", "speed")
+        speed_kmh = mps * 3.6 if mps is not None else 0.0
+
+    sats = pick("sat", "sats", "satellites", "n_sats")
+    # 0 satellites means a network (cell/Wi-Fi) fix, not "zero satellites seen".
+    n_sats = int(sats) if sats else None
+
+    return GPSFix(
+        latitude=lat,
+        longitude=lon,
+        speed_kmh=speed_kmh,
+        heading=pick("dir", "heading", "bearing", "course") or 0.0,
+        accuracy_m=pick("acc", "accuracy", "accuracy_m"),
+        hdop=pick("hdop"),
+        n_sats=n_sats,
+        ts_utc=time.time(),
+        t_mono=time.monotonic(),
+    )
 
 
 def _float(value: Any, default: float) -> float:

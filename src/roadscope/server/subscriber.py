@@ -7,6 +7,8 @@ at-least-once outbox safe.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,7 @@ class Receiver:
                 float(payload["ts_utc"]),
                 float(payload["lat"]),
                 float(payload["lon"]),
+                thumb_path=self._save_image(frame_id, payload.get("image_jpeg_b64")),
             )
         inserted = self.repo.insert_detection(trip_id, payload)
         self.counts["detection" if inserted else "duplicates"] += 1
@@ -95,6 +98,33 @@ class Receiver:
                 payload.get("lon"),
                 payload.get("gps_accuracy_m"),
             )
+
+    def frames_dir(self) -> Path:
+        """Evidence images live beside the server database, in ``frames/``."""
+        return Path(self.settings.server_db).resolve().parent / "frames"
+
+    def _save_image(self, frame_id: str, b64: str | None) -> str | None:
+        """Write the evidence frame sent by the agent. Returns the file name.
+
+        The name is derived from ``frame_id`` so a redelivered message simply
+        rewrites the same file. A corrupt image never blocks the detection
+        itself from being stored.
+        """
+        if not b64 or "/" in frame_id or "\\" in frame_id:
+            return None
+        try:
+            data = base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError):
+            log.warning("detection %s carried an undecodable image", frame_id)
+            return None
+        if not data.startswith(b"\xff\xd8"):
+            log.warning("detection %s image is not a JPEG", frame_id)
+            return None
+        folder = self.frames_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"{frame_id}.jpg"
+        (folder / name).write_bytes(data)
+        return name
 
     def _status(self, device_id: str, payload: dict[str, Any]) -> None:
         self.repo.upsert_device(

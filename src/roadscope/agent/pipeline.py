@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import json
 import queue
 import threading
 import time
@@ -94,6 +95,9 @@ class EdgePipeline:
         self._fixes: list[GPSFix] = []
         self._fix_lock = threading.Lock()
         self._seq = itertools.count(1)
+        # Rate-limits for operator warnings, so a problem is visible in the
+        # agent log without flooding it at frame rate.
+        self._last_warn: dict[str, float] = {}
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -166,6 +170,14 @@ class EdgePipeline:
         self.health.record_gps(accepted)
         if not accepted:
             log.debug("rejected fix (%s): %.5f,%.5f", flag, fix.latitude, fix.longitude)
+            self._warn(
+                "gps-rejected",
+                "GPS fix rejected (%s, accuracy %s m, limit %.0f m). Detections need an "
+                "accepted fix; raise --gps-max-accuracy if the phone is indoors.",
+                flag,
+                f"{fix.accuracy_m:.0f}" if fix.accuracy_m is not None else "?",
+                self.settings.gps_max_accuracy_m,
+            )
             return False
 
         filtered = self._kalman.update(fix, t_mono=fix.t_mono)
@@ -176,7 +188,59 @@ class EdgePipeline:
                 del self._fixes[:300]
 
         self._enqueue_gps(filtered)
+        self._remember_fix(filtered)
         return True
+
+    # -- last known position -------------------------------------------------
+    @property
+    def last_fix_path(self):
+        return self.settings.outbox_db.parent / "last_gps_fix.json"
+
+    def _remember_fix(self, fix: GPSFix) -> None:
+        """Persist the latest accepted fix so a restart can reuse it."""
+        with contextlib.suppress(OSError):
+            self.last_fix_path.write_text(
+                json.dumps(
+                    {
+                        "lat": fix.latitude,
+                        "lon": fix.longitude,
+                        "accuracy_m": fix.accuracy_m,
+                        "ts_utc": fix.ts_utc,
+                    }
+                )
+            )
+
+    def restore_last_fix(self, max_age_s: float) -> float | None:
+        """Start from the last accepted position if it is recent enough.
+
+        For a stationary demo: the phone's GPS can take minutes to produce a
+        fix indoors, and without any fix every detection is dropped. Returns
+        the age of the restored fix in seconds, or ``None`` if nothing usable.
+        """
+        try:
+            saved = json.loads(self.last_fix_path.read_text())
+            age = time.time() - float(saved["ts_utc"])
+            lat, lon = float(saved["lat"]), float(saved["lon"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        if age > max_age_s:
+            return None
+        fix = GPSFix(
+            latitude=lat,
+            longitude=lon,
+            accuracy_m=saved.get("accuracy_m"),
+            ts_utc=float(saved["ts_utc"]),
+            t_mono=time.monotonic(),
+        )
+        with self._fix_lock:
+            self._fixes.append(fix)
+        return age
+
+    def _warn(self, key: str, msg: str, *args: Any, every_s: float = 5.0) -> None:
+        now = time.monotonic()
+        if now - self._last_warn.get(key, -1e9) >= every_s:
+            self._last_warn[key] = now
+            log.warning(msg, *args)
 
     def _position_at(self, t_mono: float) -> tuple[float, float, float | None]:
         """Interpolate position for a frame timestamp."""
@@ -248,6 +312,16 @@ class EdgePipeline:
         lat, lon, accuracy = self._position_at(t_mono)
         if (lat, lon) == (0.0, 0.0):
             log.debug("detections without a GPS fix yet: %d", len(detections))
+            if detections:
+                best = max(detections, key=lambda d: d.confidence)
+                self._warn(
+                    "no-gps",
+                    "model sees %d defect(s) (best %s %.0f%%) but there is NO GPS fix yet, "
+                    "so nothing is recorded. Waiting for the phone's GPS...",
+                    len(detections),
+                    best.class_code,
+                    best.confidence * 100,
+                )
             return
 
         # Fuse, geofence and transmit only confirmed, deduplicated defects.

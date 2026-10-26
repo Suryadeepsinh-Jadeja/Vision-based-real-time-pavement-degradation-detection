@@ -10,6 +10,7 @@ import json
 import threading
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 import paho.mqtt.client as mqtt
 
@@ -23,6 +24,19 @@ try:
     _API = mqtt.CallbackAPIVersion.VERSION2
 except AttributeError:  # paho 1.x
     _API = None
+
+
+def broker_address(url: str) -> tuple[str, int]:
+    """Split ``tcp://host:port`` into ``(host, port)`` for paho.
+
+    paho's ``connect`` takes a bare hostname. Passing the whole URL makes it
+    resolve the literal string "tcp://localhost:1883" as a host name, which
+    fails silently inside the network loop and looks like "no broker".
+    """
+    if "://" not in url:
+        url = f"tcp://{url}"
+    parsed = urlparse(url)
+    return parsed.hostname or "localhost", parsed.port or 1883
 
 
 def _make_client(client_id: str) -> mqtt.Client:
@@ -74,7 +88,8 @@ class MQTTPublisher:
         self.client.will_set(topic, json.dumps(payload), qos=qos, retain=True)
 
     def connect_async(self) -> None:
-        self.client.connect_async(self.url, keepalive=15)
+        host, port = broker_address(self.url)
+        self.client.connect_async(host, port, keepalive=15)
         self.client.loop_start()
 
     def publish(
@@ -150,7 +165,8 @@ class MQTTSubscriber:
             log.exception("handler failed for %s: %s", msg.topic, exc)
 
     def connect_async(self) -> None:
-        self.client.connect_async(self.url, keepalive=15)
+        host, port = broker_address(self.url)
+        self.client.connect_async(host, port, keepalive=15)
         self.client.loop_start()
 
     def close(self) -> None:
