@@ -17,6 +17,7 @@ import sys
 
 from .. import paths
 from ..config import get_settings
+from ..geo.gps_sources import CsvGpsSource, HttpGpsSource, SyntheticGpsSource
 from ..logging_setup import get_logger, setup_logging
 from ..vision.detector import DefectDetector
 
@@ -32,6 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device-id", help="override ROADSCOPE_DEVICE_ID")
     parser.add_argument("--camera-url", help="override ROADSCOPE_CAMERA_URL")
     parser.add_argument("--model-path", help="override ROADSCOPE_MODEL_PATH")
+    parser.add_argument("--gps-url", help="poll a phone app's GPS HTTP endpoint")
+    parser.add_argument("--gps-csv", help="replay a recorded GPS track from CSV")
+    parser.add_argument(
+        "--gps-synthetic",
+        action="store_true",
+        help="use a synthetic straight-line GPS track (demo/testing)",
+    )
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, ERROR")
     parser.add_argument(
         "--seconds", type=float, default=10.0, help="how long to run before stopping"
@@ -139,12 +147,31 @@ def _run(settings, args) -> int:
 
     pipeline = EdgePipeline(settings, publisher=publisher)
     pipeline.start()
+
+    # Wire a GPS source if one was requested. The pipeline already has
+    # ingest_gps(); this thread just feeds fixes into it. Nothing here is
+    # blocking -- the source runs on its own thread.
+    gps_source = None
+    if args.gps_url:
+        gps_source = HttpGpsSource(args.gps_url)
+        log.info("GPS source: HTTP poll %s", args.gps_url)
+    elif args.gps_csv:
+        gps_source = CsvGpsSource(args.gps_csv)
+        log.info("GPS source: CSV replay %s", args.gps_csv)
+    elif args.gps_synthetic:
+        gps_source = SyntheticGpsSource()
+        log.info("GPS source: synthetic straight line")
+    if gps_source is not None:
+        gps_source.start(pipeline.ingest_gps)
+
     log.info("running for %.1fs", args.seconds)
     try:
         _time.sleep(args.seconds)
     except KeyboardInterrupt:
         log.info("interrupted")
     finally:
+        if gps_source is not None:
+            gps_source.stop()
         pipeline.stop()
         delivered = pipeline.flush()
         log.info(
